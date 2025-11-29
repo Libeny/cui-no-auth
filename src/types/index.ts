@@ -178,6 +178,7 @@ export interface SystemStatusResponse {
   configPath: string;
   activeConversations: number;
   machineId: string;
+  authRequired: boolean;
 }
 
 // Stream event types

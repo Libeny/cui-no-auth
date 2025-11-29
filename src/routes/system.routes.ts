@@ -10,7 +10,8 @@ import { execSync } from 'child_process';
 
 export function createSystemRoutes(
   processManager: ClaudeProcessManager,
-  historyReader: ClaudeHistoryReader
+  historyReader: ClaudeHistoryReader,
+  skipAuthToken: boolean = false
 ): Router {
   const router = Router();
   const logger = createLogger('SystemRoutes');
@@ -25,13 +26,18 @@ export function createSystemRoutes(
     res.json({ message: 'Hello from CUI!' });
   });
 
+  // Auth status endpoint
+  router.get('/auth-status', (req, res) => {
+    res.json({ authRequired: !skipAuthToken });
+  });
+
   // Get system status
   router.get('/status', async (req: RequestWithRequestId, res, next) => {
     const requestId = req.requestId;
     logger.debug('Get system status request', { requestId });
     
     try {
-      const systemStatus = await getSystemStatus(processManager, historyReader, logger);
+      const systemStatus = await getSystemStatus(processManager, historyReader, logger, skipAuthToken);
       
       logger.debug('System status retrieved', {
         requestId,
@@ -87,7 +93,8 @@ export function createSystemRoutes(
 async function getSystemStatus(
   processManager: ClaudeProcessManager,
   historyReader: ClaudeHistoryReader,
-  logger: Logger
+  logger: Logger,
+  skipAuthToken: boolean
 ): Promise<SystemStatusResponse> {
   try {
     // Get Claude version
@@ -118,7 +125,8 @@ async function getSystemStatus(
       claudePath,
       configPath: historyReader.homePath,
       activeConversations: processManager.getActiveSessions().length,
-      machineId
+      machineId,
+      authRequired: !skipAuthToken
     };
   } catch (_error) {
     throw new CUIError('SYSTEM_STATUS_ERROR', 'Failed to get system status', 500);
