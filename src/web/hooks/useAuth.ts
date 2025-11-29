@@ -28,20 +28,21 @@ export function setAuthToken(token: string): void {
 
 /**
  * Extract token from URL fragment and store in cookie
- * Format: #token=xxxxx
+ * Format: #token=xxxxx (support any token format)
  */
 function extractTokenFromFragment(): string | null {
   const fragment = window.location.hash;
   if (!fragment.startsWith('#token=')) {
     return null;
   }
-  
+
   const token = fragment.substring(7); // Remove '#token='
-  if (token.length !== 32 || !/^[a-f0-9]+$/.test(token)) {
-    console.warn('Invalid token format in URL fragment');
-    return null;
+
+  // Support any token format, including empty string
+  if (token.length === 0) {
+    console.log('Empty token provided - no authentication mode');
   }
-  
+
   return token;
 }
 
