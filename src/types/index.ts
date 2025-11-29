@@ -243,6 +243,14 @@ export interface SessionInfo {
   continuation_session_id: string; // ID of the continuation session if exists, default: ""
   initial_commit_head: string;  // Git commit HEAD when session started, default: ""
   permission_mode: string;      // Permission mode used for the session, default: "default"
+  
+  // Indexed fields (cached from file system)
+  summary?: string;             // Conversation summary
+  project_path?: string;        // Project working directory
+  message_count?: number;       // Total number of messages
+  total_duration?: number;      // Total duration in ms
+  model?: string;               // Model used
+  last_scanned_at?: number;     // Timestamp (ms) when the file was last scanned/indexed
 }
 
 
@@ -265,6 +273,14 @@ export interface SessionUpdateRequest {
   continuationSessionId?: string; // Optional: update continuation session
   initialCommitHead?: string;    // Optional: update initial commit head
   permissionMode?: string;       // Optional: update permission mode
+  
+  // Indexed fields updates
+  summary?: string;
+  projectPath?: string;
+  messageCount?: number;
+  totalDuration?: number;
+  model?: string;
+  lastScannedAt?: number;
 }
 
 export interface SessionUpdateResponse {

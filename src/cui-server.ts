@@ -22,6 +22,7 @@ import { NotificationService } from './services/notification-service.js';
 import { WebPushService } from './services/web-push-service.js';
 import { geminiService } from './services/gemini-service.js';
 import { ClaudeRouterService } from './services/claude-router-service.js';
+import { HistoryIndexer } from './services/history-indexer.js';
 import { 
   StreamEvent,
   CUIError,
@@ -67,6 +68,7 @@ export class CUIServer {
   private toolMetricsService: ToolMetricsService;
   private notificationService: NotificationService;
   private webPushService: WebPushService;
+  private historyIndexer: HistoryIndexer;
   private routerService?: ClaudeRouterService;
   private logger: Logger;
   private port: number;
@@ -110,6 +112,7 @@ export class CUIServer {
     this.workingDirectoriesService = new WorkingDirectoriesService(this.historyReader, this.logger);
     this.notificationService = new NotificationService();
     this.webPushService = WebPushService.getInstance();
+    this.historyIndexer = new HistoryIndexer(this.sessionInfoService);
     
     // Wire up notification service
     this.processManager.setNotificationService(this.notificationService);
@@ -314,6 +317,9 @@ export class CUIServer {
           });
         }
       });
+
+      // Start background tasks
+      this.historyIndexer.start();
       
     } catch (error) {
       this.logger.error('Failed to start server:', error, {

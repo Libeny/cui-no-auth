@@ -11,7 +11,24 @@
 [![codecov](https://codecov.io/gh/BMPixel/cui/branch/main/graph/badge.svg)](https://codecov.io/gh/BMPixel/cui)
 [![CI](https://github.com/BMPixel/cui/actions/workflows/ci.yml/badge.svg)](https://github.com/BMPixel/cui/actions/workflows/ci.yml)
 
-> **Note:** This is a fork of `cui-server` that includes a flag to bypass authentication.
+> **Note:** This is a fork of `cui-server` that includes a flag to bypass authentication and performance optimizations.
+
+## 更新说明 (v0.6.6)
+
+### 1. 性能优化：基于 SQLite 的冷加载策略
+在 AI Coding Infrastructure 的背景下，`.claude/projects` 目录下的历史记录日志往往非常庞大（包含大量代码 diff 和上下文）。
+- **旧版本**：启动时尝试一次性加载所有历史记录到内存，导致启动极慢甚至 OOM (内存溢出)。
+- **新版本**：引入了后台 Indexer 和 SQLite 索引。
+  - 列表页直接查询数据库，启动速度不再受历史记录大小影响。
+  - 仅在查看具体会话时流式加载文件内容，极大降低内存占用。
+  - 首次启动时会在后台自动建立索引，可能会有短暂延迟，之后均为秒开。
+
+### 2. 免登录体验优化 (No-Auth Fix)
+修复了 `--skip-auth-token` 模式下的用户体验。
+- 现在当前端检测到服务器开启了免登录模式时，会自动跳过 Token 输入界面，直接进入应用。
+- 适合本地受信任环境快速开发使用。
+
+---
 
 A modern web UI for your agents. Start the server and access your agents anywhere in your browser. Common Agent UI is powered by [Claude Code SDK](https://claude.ai/code) and supports all kind of LLMs with the most powerful agentic tools.
 

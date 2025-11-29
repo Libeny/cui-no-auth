@@ -2,11 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import Database from 'better-sqlite3';
-import type { SessionInfo } from '@/types/index.js';
+import type { SessionInfo, ConversationListQuery } from '@/types/index.js';
 import { createLogger } from './logger.js';
 import { type Logger } from './logger.js';
 
 type SessionRow = {
+  session_id: string;
   custom_name: string;
   created_at: string;
   updated_at: string;
@@ -16,6 +17,13 @@ type SessionRow = {
   continuation_session_id: string;
   initial_commit_head: string;
   permission_mode: string;
+  // Indexed fields
+  summary: string | null;
+  project_path: string | null;
+  message_count: number | null;
+  total_duration: number | null;
+  model: string | null;
+  last_scanned_at: number | null;
 };
 
 /**
@@ -40,6 +48,7 @@ export class SessionInfoService {
   private archiveAllStmt!: Database.Statement;
   private setMetadataStmt!: Database.Statement;
   private getMetadataStmt!: Database.Statement;
+  private updateIndexedDataStmt!: Database.Statement;
 
   constructor(customConfigDir?: string) {
     this.logger = createLogger('SessionInfoService');
@@ -94,6 +103,7 @@ export class SessionInfoService {
       this.db = new Database(this.dbPath);
       this.db.pragma('journal_mode = WAL');
 
+      // Initialize tables
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS sessions (
           session_id TEXT PRIMARY KEY,
@@ -113,6 +123,9 @@ export class SessionInfoService {
         );
       `);
 
+      // Migrate Schema: Add new indexed columns if they don't exist
+      this.migrateSchema();
+
       this.prepareStatements();
       this.ensureMetadata();
       this.isInitialized = true;
@@ -122,33 +135,46 @@ export class SessionInfoService {
     }
   }
 
+  private migrateSchema(): void {
+    const columnsToAdd = [
+      { name: 'summary', type: 'TEXT', default: 'NULL' },
+      { name: 'project_path', type: 'TEXT', default: 'NULL' },
+      { name: 'message_count', type: 'INTEGER', default: 'NULL' },
+      { name: 'total_duration', type: 'INTEGER', default: 'NULL' },
+      { name: 'model', type: 'TEXT', default: 'NULL' },
+      { name: 'last_scanned_at', type: 'INTEGER', default: 'NULL' }
+    ];
+
+    const tableInfo = this.db.pragma('table_info(sessions)') as { name: string }[];
+    const existingColumns = new Set(tableInfo.map(c => c.name));
+
+    for (const col of columnsToAdd) {
+      if (!existingColumns.has(col.name)) {
+        try {
+          this.logger.info(`Migrating schema: adding column ${col.name}`);
+          this.db.exec(`ALTER TABLE sessions ADD COLUMN ${col.name} ${col.type} DEFAULT ${col.default}`);
+        } catch (error) {
+          this.logger.warn(`Failed to add column ${col.name} (might already exist)`, error);
+        }
+      }
+    }
+  }
+
   private prepareStatements(): void {
     this.getSessionStmt = this.db.prepare('SELECT * FROM sessions WHERE session_id = ?');
+    
     this.insertSessionStmt = this.db.prepare(`
       INSERT INTO sessions (
-        session_id,
-        custom_name,
-        created_at,
-        updated_at,
-        version,
-        pinned,
-        archived,
-        continuation_session_id,
-        initial_commit_head,
-        permission_mode
+        session_id, custom_name, created_at, updated_at, version,
+        pinned, archived, continuation_session_id, initial_commit_head, permission_mode,
+        summary, project_path, message_count, total_duration, model, last_scanned_at
       ) VALUES (
-        @session_id,
-        @custom_name,
-        @created_at,
-        @updated_at,
-        @version,
-        @pinned,
-        @archived,
-        @continuation_session_id,
-        @initial_commit_head,
-        @permission_mode
+        @session_id, @custom_name, @created_at, @updated_at, @version,
+        @pinned, @archived, @continuation_session_id, @initial_commit_head, @permission_mode,
+        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at
       )
     `);
+
     this.updateSessionStmt = this.db.prepare(`
       UPDATE sessions SET
         custom_name=@custom_name,
@@ -158,9 +184,35 @@ export class SessionInfoService {
         continuation_session_id=@continuation_session_id,
         initial_commit_head=@initial_commit_head,
         permission_mode=@permission_mode,
-        version=@version
+        version=@version,
+        summary=COALESCE(@summary, summary),
+        project_path=COALESCE(@project_path, project_path),
+        message_count=COALESCE(@message_count, message_count),
+        total_duration=COALESCE(@total_duration, total_duration),
+        model=COALESCE(@model, model),
+        last_scanned_at=COALESCE(@last_scanned_at, last_scanned_at)
       WHERE session_id=@session_id
     `);
+
+    // Specialized statement for the indexer to update indexed fields without touching user preferences
+    this.updateIndexedDataStmt = this.db.prepare(`
+      INSERT INTO sessions (
+        session_id, created_at, updated_at, version, 
+        summary, project_path, message_count, total_duration, model, last_scanned_at
+      ) VALUES (
+        @session_id, @created_at, @updated_at, 3,
+        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at
+      )
+      ON CONFLICT(session_id) DO UPDATE SET
+        summary=excluded.summary,
+        project_path=excluded.project_path,
+        message_count=excluded.message_count,
+        total_duration=excluded.total_duration,
+        model=excluded.model,
+        last_scanned_at=excluded.last_scanned_at,
+        updated_at=excluded.updated_at
+    `);
+
     this.deleteSessionStmt = this.db.prepare('DELETE FROM sessions WHERE session_id = ?');
     this.getAllStmt = this.db.prepare('SELECT * FROM sessions');
     this.countStmt = this.db.prepare('SELECT COUNT(*) as count FROM sessions');
@@ -173,7 +225,7 @@ export class SessionInfoService {
     const now = new Date().toISOString();
     const schema = this.getMetadataStmt.get('schema_version') as { value?: string } | undefined;
     if (!schema) {
-      this.setMetadataStmt.run({ key: 'schema_version', value: '3' });
+      this.setMetadataStmt.run({ key: 'schema_version', value: '4' });
       this.setMetadataStmt.run({ key: 'created_at', value: now });
       this.setMetadataStmt.run({ key: 'last_updated', value: now });
     }
@@ -189,7 +241,14 @@ export class SessionInfoService {
       archived: !!row.archived,
       continuation_session_id: row.continuation_session_id,
       initial_commit_head: row.initial_commit_head,
-      permission_mode: row.permission_mode
+      permission_mode: row.permission_mode,
+      // Map indexed fields
+      summary: row.summary || undefined,
+      project_path: row.project_path || undefined,
+      message_count: row.message_count || undefined,
+      total_duration: row.total_duration || undefined,
+      model: row.model || undefined,
+      last_scanned_at: row.last_scanned_at || undefined
     };
   }
 
@@ -212,6 +271,7 @@ export class SessionInfoService {
         initial_commit_head: '',
         permission_mode: 'default'
       };
+      
       this.insertSessionStmt.run({
         session_id: sessionId,
         custom_name: '',
@@ -222,8 +282,15 @@ export class SessionInfoService {
         archived: 0,
         continuation_session_id: '',
         initial_commit_head: '',
-        permission_mode: 'default'
+        permission_mode: 'default',
+        summary: null,
+        project_path: null,
+        message_count: null,
+        total_duration: null,
+        model: null,
+        last_scanned_at: null
       });
+      
       this.setMetadataStmt.run({ key: 'last_updated', value: now });
       return defaultSession;
     } catch (error) {
@@ -247,56 +314,107 @@ export class SessionInfoService {
     try {
       const existingRow = this.getSessionStmt.get(sessionId) as SessionRow | undefined;
       const now = new Date().toISOString();
+      
+      // Prepare parameters for INSERT or UPDATE
+      // We use a merged object for parameters
+      const merged = existingRow ? { ...this.mapRow(existingRow), ...updates } : {
+        custom_name: '',
+        created_at: now,
+        updated_at: now,
+        version: 3,
+        pinned: false,
+        archived: false,
+        continuation_session_id: '',
+        initial_commit_head: '',
+        permission_mode: 'default',
+        summary: undefined,
+        project_path: undefined,
+        message_count: undefined,
+        total_duration: undefined,
+        model: undefined,
+        last_scanned_at: undefined,
+        ...updates
+      };
+
+      const params = {
+        session_id: sessionId,
+        custom_name: merged.custom_name,
+        created_at: merged.created_at,
+        updated_at: now, // Always update updated_at
+        version: merged.version,
+        pinned: merged.pinned ? 1 : 0,
+        archived: merged.archived ? 1 : 0,
+        continuation_session_id: merged.continuation_session_id,
+        initial_commit_head: merged.initial_commit_head,
+        permission_mode: merged.permission_mode,
+        summary: merged.summary || null,
+        project_path: merged.project_path || null,
+        message_count: merged.message_count || null,
+        total_duration: merged.total_duration || null,
+        model: merged.model || null,
+        last_scanned_at: merged.last_scanned_at || null
+      };
+
       if (existingRow) {
-        const updatedSession: SessionInfo = {
-          ...this.mapRow(existingRow),
-          ...updates,
-          updated_at: now
-        };
-        this.updateSessionStmt.run({
-          session_id: sessionId,
-          custom_name: updatedSession.custom_name,
-          updated_at: updatedSession.updated_at,
-          pinned: updatedSession.pinned ? 1 : 0,
-          archived: updatedSession.archived ? 1 : 0,
-          continuation_session_id: updatedSession.continuation_session_id,
-          initial_commit_head: updatedSession.initial_commit_head,
-          permission_mode: updatedSession.permission_mode,
-          version: updatedSession.version
-        });
-        this.setMetadataStmt.run({ key: 'last_updated', value: now });
-        return updatedSession;
+        this.updateSessionStmt.run(params);
       } else {
-        const newSession: SessionInfo = {
-          custom_name: '',
-          created_at: now,
-          updated_at: now,
-          version: 3,
-          pinned: false,
-          archived: false,
-          continuation_session_id: '',
-          initial_commit_head: '',
-          permission_mode: 'default',
-          ...updates
-        };
-        this.insertSessionStmt.run({
-          session_id: sessionId,
-          custom_name: newSession.custom_name,
-          created_at: newSession.created_at,
-          updated_at: newSession.updated_at,
-          version: newSession.version,
-          pinned: newSession.pinned ? 1 : 0,
-          archived: newSession.archived ? 1 : 0,
-          continuation_session_id: newSession.continuation_session_id,
-          initial_commit_head: newSession.initial_commit_head,
-          permission_mode: newSession.permission_mode
-        });
-        this.setMetadataStmt.run({ key: 'last_updated', value: now });
-        return newSession;
+        this.insertSessionStmt.run(params);
       }
+      
+      this.setMetadataStmt.run({ key: 'last_updated', value: now });
+      return { ...merged, updated_at: now };
+      
     } catch (error) {
       this.logger.error('Failed to update session info', { sessionId, updates, error });
       throw new Error(`Failed to update session info: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Bulk upsert indexed metadata (used by Indexer)
+   */
+  async bulkUpsertIndexedMetadata(items: Array<{
+    sessionId: string;
+    summary?: string;
+    projectPath?: string;
+    messageCount?: number;
+    totalDuration?: number;
+    model?: string;
+    lastScannedAt: number;
+    createdAt?: string;
+    updatedAt?: string;
+  }>): Promise<void> {
+    if (items.length === 0) return;
+
+    try {
+      const transaction = this.db.transaction((rows) => {
+        let changes = 0;
+        for (const row of rows) {
+          const info = this.updateIndexedDataStmt.run({
+            session_id: row.sessionId,
+            created_at: row.createdAt || new Date().toISOString(),
+            updated_at: row.updatedAt || new Date().toISOString(),
+            summary: row.summary || null,
+            project_path: row.projectPath || null,
+            message_count: row.messageCount || null,
+            total_duration: row.totalDuration || null,
+            model: row.model || null,
+            last_scanned_at: row.lastScannedAt
+          });
+          changes += info.changes;
+        }
+        return changes;
+      });
+
+      const changes = transaction(items);
+      this.logger.debug('Bulk upserted indexed metadata', { count: items.length, changes });
+      
+      const now = new Date().toISOString();
+      this.setMetadataStmt.run({ key: 'last_updated', value: now });
+      
+    } catch (error) {
+      this.logger.error('Failed to bulk upsert indexed metadata', error);
+      throw error;
     }
   }
 
@@ -364,6 +482,75 @@ export class SessionInfoService {
     }
   }
 
+  /**
+   * Get conversations with filtering, sorting and pagination
+   */
+  async getConversations(query: ConversationListQuery): Promise<{ conversations: SessionInfo[]; total: number }> {
+    try {
+      let sql = 'SELECT * FROM sessions WHERE 1=1';
+      const params: any[] = [];
+      
+      // Filtering
+      if (query.projectPath) {
+        sql += ' AND project_path = ?';
+        params.push(query.projectPath);
+      }
+      
+      if (query.archived !== undefined) {
+        sql += ' AND archived = ?';
+        params.push(query.archived ? 1 : 0);
+      }
+      
+      if (query.pinned !== undefined) {
+        sql += ' AND pinned = ?';
+        params.push(query.pinned ? 1 : 0);
+      }
+      
+      if (query.hasContinuation !== undefined) {
+        if (query.hasContinuation) {
+          sql += " AND continuation_session_id != ''";
+        } else {
+          sql += " AND continuation_session_id = ''";
+        }
+      }
+
+      // Count total before pagination
+      const countSql = sql.replace('SELECT *', 'SELECT COUNT(*) as count');
+      const total = (this.db.prepare(countSql).get(...params) as { count: number }).count;
+      
+      // Sorting
+      const sortBy = query.sortBy === 'created' ? 'created_at' : 'updated_at';
+      const order = query.order === 'desc' ? 'DESC' : 'ASC';
+      sql += ` ORDER BY ${sortBy} ${order}`;
+      
+      // Pagination
+      if (query.limit !== undefined) {
+        sql += ' LIMIT ?';
+        params.push(query.limit);
+        
+        if (query.offset !== undefined) {
+          sql += ' OFFSET ?';
+          params.push(query.offset);
+        }
+      }
+      
+      const rows = this.db.prepare(sql).all(...params) as Array<SessionRow>;
+      const conversations = rows.map(row => ({
+        ...this.mapRow(row),
+        // Ensure session_id is mapped to sessionId if SessionInfo type requires it, 
+        // but currently SessionInfo doesn't have sessionId field (it's usually wrapper)
+        // We will handle this in the caller
+        sessionId: row.session_id 
+      }));
+      
+      return { conversations, total };
+      
+    } catch (error) {
+      this.logger.error('Failed to get conversations', error);
+      throw new Error(`Failed to get conversations: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   reinitializePaths(customConfigDir?: string): void {
     this.initializePaths(customConfigDir);
   }
@@ -397,31 +584,17 @@ export class SessionInfoService {
   }
 
   async syncMissingSessions(sessionIds: string[]): Promise<number> {
+    // This is legacy sync, can keep it for now or deprecate
+    // The new bulkUpsertIndexedMetadata is preferred
     try {
       const now = new Date().toISOString();
       const insert = this.db.prepare(`
         INSERT OR IGNORE INTO sessions (
-          session_id,
-          custom_name,
-          created_at,
-          updated_at,
-          version,
-          pinned,
-          archived,
-          continuation_session_id,
-          initial_commit_head,
-          permission_mode
+          session_id, custom_name, created_at, updated_at, version,
+          pinned, archived, continuation_session_id, initial_commit_head, permission_mode
         ) VALUES (
-          @session_id,
-          '',
-          @now,
-          @now,
-          3,
-          0,
-          0,
-          '',
-          '',
-          'default'
+          @session_id, '', @now, @now, 3,
+          0, 0, '', '', 'default'
         )
       `);
       const transaction = this.db.transaction((ids: string[]) => {
@@ -442,4 +615,3 @@ export class SessionInfoService {
     }
   }
 }
-
