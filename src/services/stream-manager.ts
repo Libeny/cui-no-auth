@@ -26,6 +26,11 @@ export class StreamManager extends EventEmitter {
   addClient(streamingId: string, res: Response): void {
     this.logger.debug('Adding client to stream', { streamingId });
     
+    if (res.writableEnded || res.destroyed) {
+      this.logger.debug('Client response already closed, skipping addClient', { streamingId });
+      return;
+    }
+    
     // Configure response for Server-Sent Events
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -52,12 +57,13 @@ export class StreamManager extends EventEmitter {
       timestamp: new Date().toISOString()
     };
     
-    this.logger.debug('Sending initial SSE connection confirmation', { 
-      streamingId,
-      clientCount: this.clients.get(streamingId)!.size
-    });
-    
-    this.sendSSEEvent(res, connectionMessage);
+    try {
+      this.sendSSEEvent(res, connectionMessage);
+    } catch (error) {
+      this.logger.debug('Failed to send initial SSE connection message', { error, streamingId });
+      this.removeClient(streamingId, res);
+      return;
+    }
     
     // Start heartbeat if this is the first client
     this.startHeartbeat();
@@ -94,6 +100,7 @@ export class StreamManager extends EventEmitter {
 
   /**
    * Broadcast an event to all clients watching a session
+   * If streamingId is 'global', broadcast to ALL connected clients
    */
   broadcast(streamingId: string, event: StreamEvent): void {
     this.logger.debug('Broadcasting event to clients', { 
@@ -102,6 +109,26 @@ export class StreamManager extends EventEmitter {
       eventSubtype: 'subtype' in event ? event.subtype : undefined 
     });
     
+    // Global broadcast logic
+    if (streamingId === 'global') {
+      this.logger.debug('Broadcasting global event to all clients');
+      const allClients = new Set<Response>();
+      for (const clientSet of this.clients.values()) {
+        for (const client of clientSet) {
+          allClients.add(client);
+        }
+      }
+      
+      for (const client of allClients) {
+        try {
+          this.sendSSEEvent(client, event);
+        } catch (error) {
+          this.logger.error('Failed to send global SSE event to client', error);
+        }
+      }
+      return;
+    }
+
     const clients = this.clients.get(streamingId);
     if (!clients || clients.size === 0) {
       this.logger.debug('No clients found for streaming session, dropping message', { streamingId });

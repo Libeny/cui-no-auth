@@ -168,10 +168,8 @@ export function TaskItem({
                 {formatTimestamp(timestamp)}
               </span>
               <span className="text-muted-foreground">·</span>
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap">
-                {projectPath 
-                  ? (recentDirectories[projectPath]?.shortname || projectPath.split('/').pop() || projectPath)
-                  : 'No project'}
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap" title={projectPath}>
+                {projectPath || 'No project'}
               </span>
               {messageCount !== undefined && (
                 <>

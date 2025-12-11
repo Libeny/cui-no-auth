@@ -113,6 +113,7 @@ export class CUIServer {
     this.notificationService = new NotificationService();
     this.webPushService = WebPushService.getInstance();
     this.historyIndexer = new HistoryIndexer(this.sessionInfoService);
+    this.historyIndexer.setStreamManager(this.streamManager);
     
     // Wire up notification service
     this.processManager.setNotificationService(this.notificationService);

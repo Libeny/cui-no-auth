@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { api } from '../services/api';
 import { useStreamStatus } from './StreamStatusContext';
-import type { ConversationSummary, WorkingDirectory, ConversationSummaryWithLiveStatus } from '../types';
+import { useStreaming } from '../hooks/useStreaming';
+import type { ConversationSummary, WorkingDirectory, ConversationSummaryWithLiveStatus, StreamEvent } from '../types';
 
 interface RecentDirectory {
   lastDate: string;
@@ -19,7 +20,7 @@ interface ConversationsContextType {
     hasContinuation?: boolean;
     archived?: boolean;
     pinned?: boolean;
-  }) => Promise<void>;
+  }, showLoading?: boolean) => Promise<void>;
   loadMoreConversations: () => Promise<void>;
   getMostRecentWorkingDirectory: () => string | null;
 }
@@ -37,6 +38,10 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [recentDirectories, setRecentDirectories] = useState<Record<string, RecentDirectory>>({});
   const { subscribeToStreams, getStreamStatus, streamStatuses } = useStreamStatus();
+  
+  // Track current state for event handlers
+  const conversationsRef = useRef(conversations);
+  useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
 
   const loadWorkingDirectories = async (): Promise<Record<string, RecentDirectory> | null> => {
     try {
@@ -89,9 +94,12 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     hasContinuation?: boolean;
     archived?: boolean;
     pinned?: boolean;
-  }) => {
-    setLoading(true);
-    setError(null);
+  }, showLoading: boolean = true) => {
+    if (showLoading) {
+      setLoading(true);
+      setError(null);
+    }
+    
     try {
       const loadLimit = limit || INITIAL_LIMIT;
       // Load working directories from API in parallel with conversations
@@ -119,10 +127,10 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
         subscribeToStreams(ongoingStreamIds);
       }
     } catch (err) {
-      setError('Failed to load conversations');
+      if (showLoading) setError('Failed to load conversations');
       console.error('Error loading conversations:', err);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
@@ -206,6 +214,24 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
       });
     });
   }, [streamStatuses, getStreamStatus]);
+
+  // Subscribe to global events for real-time list updates
+  useStreaming('global', {
+    onMessage: (event) => {
+      if (event.type === 'index_update') {
+        // Refresh the list silently when any session is updated
+        // Use current conversations length to maintain pagination
+        const currentCount = conversationsRef.current.length || INITIAL_LIMIT;
+        // Note: we can't easily access current filters here, so we default.
+        // If strict filter correctness is needed, filters should be moved to state.
+        // For now, reloading with default filters is acceptable or we pass empty filters 
+        // which might reset tab view? Actually `loadConversations` uses default filters if not passed.
+        // To do this perfectly, we'd need to lift `activeTab` or filters into this context.
+        // For MVP, let's just reload.
+        loadConversations(currentCount, undefined, false);
+      }
+    }
+  });
 
   return (
     <ConversationsContext.Provider 

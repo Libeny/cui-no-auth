@@ -187,6 +187,7 @@ export type StreamEvent =
   | { type: 'permission_request'; data: PermissionRequest; streamingId: string; timestamp: string }
   | { type: 'error'; error: string; streamingId: string; timestamp: string }
   | { type: 'closed'; streamingId: string; timestamp: string }
+  | { type: 'index_update'; sessionId: string; timestamp: string }
   | SystemInitMessage
   | AssistantStreamMessage
   | UserStreamMessage
@@ -251,6 +252,7 @@ export interface SessionInfo {
   total_duration?: number;      // Total duration in ms
   model?: string;               // Model used
   last_scanned_at?: number;     // Timestamp (ms) when the file was last scanned/indexed
+  file_path?: string;           // Full path to the log file (optimization)
 }
 
 

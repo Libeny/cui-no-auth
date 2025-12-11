@@ -190,6 +190,22 @@ export class ClaudeHistoryReader {
    * This is a fallback if we can't derive path directly
    */
   private async locateSessionFile(projectsDir: string, sessionId: string): Promise<string | null> {
+    // Optimization: Check index first (O(1) lookup)
+    try {
+      // Use 'any' cast if TypeScript complains about missing property before rebuild propagates types
+      const info = await this.sessionInfoService.getSessionInfo(sessionId) as any;
+      if (info.file_path) {
+        try {
+          await fs.access(info.file_path);
+          return info.file_path;
+        } catch {
+          this.logger.debug('Indexed file path not found on disk, falling back to scan', { sessionId, path: info.file_path });
+        }
+      }
+    } catch (error) {
+      this.logger.debug('Failed to query session info for file path', { sessionId, error });
+    }
+
     // Optimization: Try to guess the directory name from project path if available
     // But simplest reliable way is to look for {sessionId}.jsonl recursively or rely on finding it efficiently.
     // Since we don't store the *exact* file path in DB (only project path), we might need to search.

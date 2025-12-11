@@ -71,81 +71,96 @@ export function ConversationView() {
     };
   }, [sessionId]);
 
-  // Load conversation history
-  useEffect(() => {
-    const loadConversation = async () => {
-      if (!sessionId) return;
-      
+  // Fetch conversation data
+  const fetchConversation = useCallback(async (showLoading = true, shouldFocus = true) => {
+    if (!sessionId) return;
+    
+    if (showLoading) {
       setIsLoading(true);
       setError(null);
+    }
 
-      try {
-        const details = await api.getConversationDetails(sessionId);
-        const chatMessages = convertToChatlMessages(details);
-        
-        // Always load fresh messages from backend
-        setAllMessages(chatMessages);
-        
-        // Set working directory from the most recent message with a working directory
-        const messagesWithCwd = chatMessages.filter(msg => msg.workingDirectory);
-        if (messagesWithCwd.length > 0) {
-          const latestCwd = messagesWithCwd[messagesWithCwd.length - 1].workingDirectory;
-          if (latestCwd) {
-            setCurrentWorkingDirectory(latestCwd);
-          }
+    try {
+      const details = await api.getConversationDetails(sessionId);
+      const chatMessages = convertToChatlMessages(details);
+      
+      // Always load fresh messages from backend
+      setAllMessages(chatMessages);
+      
+      // Set working directory from the most recent message with a working directory
+      const messagesWithCwd = chatMessages.filter(msg => msg.workingDirectory);
+      if (messagesWithCwd.length > 0) {
+        const latestCwd = messagesWithCwd[messagesWithCwd.length - 1].workingDirectory;
+        if (latestCwd) {
+          setCurrentWorkingDirectory(latestCwd);
         }
+      }
+      
+      // Check if this conversation has an active stream
+      const conversationsResponse = await api.getConversations({ limit: 100 });
+      const currentConversation = conversationsResponse.conversations.find(
+        conv => conv.sessionId === sessionId
+      );
+      
+      if (currentConversation) {
+        setConversationSummary(currentConversation);
         
-        // Check if this conversation has an active stream
-        const conversationsResponse = await api.getConversations({ limit: 100 });
-        const currentConversation = conversationsResponse.conversations.find(
-          conv => conv.sessionId === sessionId
-        );
+        // Set conversation title from custom name or summary
+        const title = currentConversation.sessionInfo.custom_name || currentConversation.summary || 'Untitled';
+        setConversationTitle(title);
         
-        if (currentConversation) {
-          setConversationSummary(currentConversation);
+        if (currentConversation.status === 'ongoing' && currentConversation.streamingId) {
+          // Active stream, check for existing pending permissions
+          setStreamingId(currentConversation.streamingId);
           
-          // Set conversation title from custom name or summary
-          const title = currentConversation.sessionInfo.custom_name || currentConversation.summary || 'Untitled';
-          setConversationTitle(title);
-          
-          if (currentConversation.status === 'ongoing' && currentConversation.streamingId) {
-            // Active stream, check for existing pending permissions
-            setStreamingId(currentConversation.streamingId);
+          try {
+            const { permissions } = await api.getPermissions({ 
+              streamingId: currentConversation.streamingId, 
+              status: 'pending' 
+            });
             
-            try {
-              const { permissions } = await api.getPermissions({ 
-                streamingId: currentConversation.streamingId, 
-                status: 'pending' 
-              });
+            if (permissions.length > 0) {
+              // Take the most recent pending permission (by timestamp)
+              const mostRecentPermission = permissions.reduce((latest, current) => 
+                new Date(current.timestamp) > new Date(latest.timestamp) ? current : latest
+              );
               
-              if (permissions.length > 0) {
-                // Take the most recent pending permission (by timestamp)
-                const mostRecentPermission = permissions.reduce((latest, current) => 
-                  new Date(current.timestamp) > new Date(latest.timestamp) ? current : latest
-                );
-                
-                setPermissionRequest(mostRecentPermission);
-              }
-            } catch (permissionError) {
-              // Don't break conversation loading if permission fetching fails
-              console.warn('[ConversationView] Failed to fetch existing permissions:', permissionError);
+              setPermissionRequest(mostRecentPermission);
             }
+          } catch (permissionError) {
+            // Don't break conversation loading if permission fetching fails
+            console.warn('[ConversationView] Failed to fetch existing permissions:', permissionError);
           }
         }
-      } catch (err: any) {
-        setError(err.message || 'Failed to load conversation');
-      } finally {
-        setIsLoading(false);
-        
-        // Focus the input after loading is complete
+      }
+    } catch (err: any) {
+      if (showLoading) setError(err.message || 'Failed to load conversation');
+      console.error('Failed to refresh conversation:', err);
+    } finally {
+      if (showLoading) setIsLoading(false);
+      
+      // Focus the input after loading is complete
+      if (shouldFocus) {
         setTimeout(() => {
           composerRef.current?.focusInput();
         }, 100);
       }
-    };
+    }
+  }, [sessionId, setAllMessages, setPermissionRequest]);
 
-    loadConversation();
-  }, [sessionId, setAllMessages]);
+  // Initial load
+  useEffect(() => {
+    fetchConversation(true, true);
+  }, [fetchConversation]);
+
+  // Listen for external updates (from file watcher)
+  useStreaming('global', {
+    onMessage: (event) => {
+      if (event.type === 'index_update' && event.sessionId === sessionId) {
+        fetchConversation(false, false);
+      }
+    }
+  });
 
   const { isConnected, disconnect } = useStreaming(streamingId, {
     onMessage: handleStreamMessage,

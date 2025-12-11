@@ -24,6 +24,7 @@ type SessionRow = {
   total_duration: number | null;
   model: string | null;
   last_scanned_at: number | null;
+  file_path: string | null;
 };
 
 /**
@@ -142,7 +143,8 @@ export class SessionInfoService {
       { name: 'message_count', type: 'INTEGER', default: 'NULL' },
       { name: 'total_duration', type: 'INTEGER', default: 'NULL' },
       { name: 'model', type: 'TEXT', default: 'NULL' },
-      { name: 'last_scanned_at', type: 'INTEGER', default: 'NULL' }
+      { name: 'last_scanned_at', type: 'INTEGER', default: 'NULL' },
+      { name: 'file_path', type: 'TEXT', default: 'NULL' }
     ];
 
     const tableInfo = this.db.pragma('table_info(sessions)') as { name: string }[];
@@ -167,11 +169,11 @@ export class SessionInfoService {
       INSERT INTO sessions (
         session_id, custom_name, created_at, updated_at, version,
         pinned, archived, continuation_session_id, initial_commit_head, permission_mode,
-        summary, project_path, message_count, total_duration, model, last_scanned_at
+        summary, project_path, message_count, total_duration, model, last_scanned_at, file_path
       ) VALUES (
         @session_id, @custom_name, @created_at, @updated_at, @version,
         @pinned, @archived, @continuation_session_id, @initial_commit_head, @permission_mode,
-        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at
+        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at, @file_path
       )
     `);
 
@@ -190,7 +192,8 @@ export class SessionInfoService {
         message_count=COALESCE(@message_count, message_count),
         total_duration=COALESCE(@total_duration, total_duration),
         model=COALESCE(@model, model),
-        last_scanned_at=COALESCE(@last_scanned_at, last_scanned_at)
+        last_scanned_at=COALESCE(@last_scanned_at, last_scanned_at),
+        file_path=COALESCE(@file_path, file_path)
       WHERE session_id=@session_id
     `);
 
@@ -198,10 +201,10 @@ export class SessionInfoService {
     this.updateIndexedDataStmt = this.db.prepare(`
       INSERT INTO sessions (
         session_id, created_at, updated_at, version, 
-        summary, project_path, message_count, total_duration, model, last_scanned_at
+        summary, project_path, message_count, total_duration, model, last_scanned_at, file_path
       ) VALUES (
         @session_id, @created_at, @updated_at, 3,
-        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at
+        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at, @file_path
       )
       ON CONFLICT(session_id) DO UPDATE SET
         summary=excluded.summary,
@@ -210,6 +213,7 @@ export class SessionInfoService {
         total_duration=excluded.total_duration,
         model=excluded.model,
         last_scanned_at=excluded.last_scanned_at,
+        file_path=excluded.file_path,
         updated_at=excluded.updated_at
     `);
 
@@ -248,7 +252,8 @@ export class SessionInfoService {
       message_count: row.message_count || undefined,
       total_duration: row.total_duration || undefined,
       model: row.model || undefined,
-      last_scanned_at: row.last_scanned_at || undefined
+      last_scanned_at: row.last_scanned_at || undefined,
+      file_path: row.file_path || undefined
     };
   }
 
@@ -288,7 +293,8 @@ export class SessionInfoService {
         message_count: null,
         total_duration: null,
         model: null,
-        last_scanned_at: null
+        last_scanned_at: null,
+        file_path: null
       });
       
       this.setMetadataStmt.run({ key: 'last_updated', value: now });
@@ -333,6 +339,7 @@ export class SessionInfoService {
         total_duration: undefined,
         model: undefined,
         last_scanned_at: undefined,
+        file_path: undefined,
         ...updates
       };
 
@@ -352,7 +359,8 @@ export class SessionInfoService {
         message_count: merged.message_count || null,
         total_duration: merged.total_duration || null,
         model: merged.model || null,
-        last_scanned_at: merged.last_scanned_at || null
+        last_scanned_at: merged.last_scanned_at || null,
+        file_path: merged.file_path || null
       };
 
       if (existingRow) {
@@ -383,6 +391,7 @@ export class SessionInfoService {
     lastScannedAt: number;
     createdAt?: string;
     updatedAt?: string;
+    filePath?: string;
   }>): Promise<void> {
     if (items.length === 0) return;
 
@@ -399,7 +408,8 @@ export class SessionInfoService {
             message_count: row.messageCount || null,
             total_duration: row.totalDuration || null,
             model: row.model || null,
-            last_scanned_at: row.lastScannedAt
+            last_scanned_at: row.lastScannedAt,
+            file_path: row.filePath || null
           });
           changes += info.changes;
         }
