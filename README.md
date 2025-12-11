@@ -13,6 +13,27 @@
 
 > **Note:** This is a fork of `cui-server` that includes a flag to bypass authentication and performance optimizations.
 
+## 更新说明 (v0.6.7)
+
+### 1. 架构升级：全栈事件驱动更新 (Event-Driven Architecture)
+彻底废弃了基于轮询 (Polling) 的更新机制，引入了基于文件系统监听 (`fs.watch`) 和 SSE (Server-Sent Events) 的实时推送架构。
+- **零负载待机**：在没有文件写入时，CPU 和网络消耗几乎为零。
+- **秒级实时响应**：一旦检测到日志更新，后端立即通过 SSE 广播通知前端，界面刷新延迟降至 <200ms。
+- **Showcase 模式增强**：详情页和列表页均支持无人值守的实时自动更新，完美支持大屏展示或后台任务监控。
+
+### 2. 性能飞跃：详情页加载优化 (O(N) -> O(1))
+解决了随着历史记录增多导致详情页打开缓慢的问题。
+- **索引优化**：后台 Indexer 现在会将日志文件的绝对路径缓存到 SQLite 数据库中。
+- **极速读取**：读取会话详情时不再遍历扫描整个 `projects` 目录，而是直接命中文件路径，实现毫秒级打开。
+
+### 3. 体验与稳定性改进
+- **绝对路径显示**：任务列表现在显示完整的项目工作路径，而非简写的目录名。
+- **隐藏目录支持**：修复了无法访问或列出隐藏目录 (如 `.temp_repos`) 的问题。
+- **列表降噪**：自动过滤内部产生的 `agent-*.jsonl` 子任务日志，保持任务列表纯净。
+- **Crash Fix**：修复了 SSE 连接断开时可能导致的 `Response is no longer writable` 报错。
+
+---
+
 ## 更新说明 (v0.6.6)
 
 ### 1. 性能优化：基于 SQLite 的冷加载策略
