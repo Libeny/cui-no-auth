@@ -299,26 +299,21 @@ export class HistoryIndexer {
             }
           }
           
-          // 2. Capture summary
-          if (entry.type === 'summary' && entry.summary) {
-            summary = entry.summary;
-          }
-          
         } catch (e) {
           // Ignore parse errors
         }
       });
 
       rl.on('close', () => {
+        // Use truncated first user message as the summary
+        if (firstUserMessage) {
+          summary = firstUserMessage.slice(0, 100).replace(/\n/g, ' ');
+          if (firstUserMessage.length > 100) summary += '...';
+        }
+
         if (messageCount === 0 && !summary) {
             resolve(null); // Empty or invalid file
             return;
-        }
-
-        // Fallback summary
-        if (!summary && firstUserMessage) {
-          summary = firstUserMessage.slice(0, 100).replace(/\n/g, ' ');
-          if (firstUserMessage.length > 100) summary += '...';
         }
 
         resolve({

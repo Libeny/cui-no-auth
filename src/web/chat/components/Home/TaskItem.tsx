@@ -168,8 +168,9 @@ export function TaskItem({
                 {formatTimestamp(timestamp)}
               </span>
               <span className="text-muted-foreground">·</span>
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap" title={projectPath}>
-                {projectPath || 'No project'}
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap flex items-baseline gap-1" title={`${projectPath} (${_id})`}>
+                <span>{projectPath || 'No project'}</span>
+                <span className="text-muted-foreground/50 text-xs font-mono shrink-0">({_id.slice(0, 8)})</span>
               </span>
               {messageCount !== undefined && (
                 <>

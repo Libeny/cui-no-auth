@@ -156,3 +156,8 @@ To uninstall cui, simply delete the `~/.cui/` directory and remove the package w
 The best way to contribute is to suggest improvements or report bugs in the [issues](https://github.com/BMPixel/cui/issues) and give us a star ⭐!
 
 Before submitting a PR, please make sure you (or your fellow AI) have read [CONTRIBUTING.md](docs/CONTRIBUTING.md).
+
+## Future Roadmap
+
+- **智能任务状态检测**: 目前历史任务默认显示为“完成”。计划升级 Indexer 以分析日志中的退出码或错误信息，从而在列表中明确标记“失败/报错”的任务。
+- **本地 LLM 摘要生成**: 既然上游 CLI 的摘要不可靠，计划引入轻量级本地 LLM (如 Gemini Flash) 对长对话进行重新总结，生成更准确的任务标题。
