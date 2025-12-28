@@ -31,6 +31,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const lastMessageCountRef = useRef(0);
   const [showBottomButton, setShowBottomButton] = useState(false);
+  const [showTopButton, setShowTopButton] = useState(false);
 
   // Filter out user messages that only contain tool_result blocks
   const displayMessages = useMemo(() => messages.filter(message => {
@@ -147,7 +148,9 @@ export const MessageList: React.FC<MessageListProps> = ({
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = container;
       const isNearBottom = scrollHeight - scrollTop - clientHeight < 200;
+      const isScrolledDown = scrollTop > 500;
       setShowBottomButton(!isNearBottom);
+      setShowTopButton(isScrolledDown);
     };
 
     container.addEventListener('scroll', handleScroll);
@@ -192,8 +195,14 @@ export const MessageList: React.FC<MessageListProps> = ({
 
   // Jump to bottom
   const scrollToBottom = useCallback(() => {
-    virtualizer.scrollToIndex(virtualItems.length - 1, { align: 'end', behavior: 'smooth' });
+    virtualizer.scrollToIndex(virtualItems.length - 1, { align: 'end', behavior: 'auto' });
   }, [virtualizer, virtualItems.length]);
+
+  // Jump to top
+  const scrollToTop = useCallback(() => {
+    // Use 'auto' instead of 'smooth' for reliable scrolling to top on large lists
+    virtualizer.scrollToIndex(0, { align: 'start', behavior: 'auto' });
+  }, [virtualizer]);
 
   if (displayMessages.length === 0 && !isLoading) {
     return (
@@ -212,18 +221,31 @@ export const MessageList: React.FC<MessageListProps> = ({
       className="flex-1 overflow-y-auto bg-background relative"
       ref={containerRef}
     >
-      {/* Navigation button - scroll to bottom */}
-      {showBottomButton && (
-        <button
-          onClick={scrollToBottom}
-          className="fixed right-6 bottom-32 z-20 w-10 h-10 rounded-full bg-background border border-border shadow-lg flex items-center justify-center hover:bg-muted transition-colors"
-          title="跳转到底部"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-      )}
+      {/* Navigation buttons */}
+      <div className="fixed right-6 bottom-32 z-20 flex flex-col gap-2">
+        {showTopButton && (
+          <button
+            onClick={scrollToTop}
+            className="w-10 h-10 rounded-full bg-background border border-border shadow-lg flex items-center justify-center hover:bg-muted transition-colors"
+            title="回到顶部"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+            </svg>
+          </button>
+        )}
+        {showBottomButton && (
+          <button
+            onClick={scrollToBottom}
+            className="w-10 h-10 rounded-full bg-background border border-border shadow-lg flex items-center justify-center hover:bg-muted transition-colors"
+            title="跳转到底部"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        )}
+      </div>
       <div
         className="relative w-full"
         style={{ height: `${virtualizer.getTotalSize()}px` }}
