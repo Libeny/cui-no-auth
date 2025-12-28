@@ -74,7 +74,7 @@ const markdownComponents = {
   }
 };
 
-export function MessageItem({ 
+export const MessageItem = React.memo(function MessageItem({ 
   message, 
   toolResults = {}, 
   childrenMessages = {}, 
@@ -261,5 +261,4 @@ export function MessageItem({
 
   // Default fallback
   return null;
-}
-
+});

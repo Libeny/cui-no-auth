@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
 import { StopCircle, Archive, Check, X } from 'lucide-react';
 import { Button } from '@/web/chat/components/ui/button';
 import { Input } from '@/web/chat/components/ui/input';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/web/chat/components/ui/tooltip';
 import { MoreOptionsMenu } from '../MoreOptionsMenu';
 import { api } from '../../services/api';
+import { LiveTaskStatus } from './LiveTaskStatus';
 import type { StreamStatus } from '../../types';
 
 interface TaskItemProps {
@@ -14,6 +15,7 @@ interface TaskItemProps {
   projectPath: string;
   recentDirectories: Record<string, { lastDate: string; shortname: string }>;
   status: 'ongoing' | 'completed' | 'error' | 'pending';
+  streamingId?: string;
   messageCount?: number;
   toolMetrics?: {
     linesAdded: number;
@@ -24,24 +26,28 @@ interface TaskItemProps {
   liveStatus?: StreamStatus;
   isArchived?: boolean;
   isPinned?: boolean;
+  isRenaming?: boolean;
   onClick: () => void;
   onCancel?: () => void;
   onArchive?: () => void;
   onUnarchive?: () => void;
+  onStartRename?: () => void;
+  onCancelRename?: () => void;
   onNameUpdate?: () => void;
   onPinToggle?: (isPinned: boolean) => void;
 }
 
-export function TaskItem({ 
+export const TaskItem = memo(function TaskItem({ 
   id: _id, 
   title, 
   timestamp, 
   projectPath, 
   recentDirectories,
   status,
+  streamingId,
   messageCount,
   toolMetrics,
-  liveStatus,
+  // liveStatus is deprecated in favor of LiveTaskStatus component
   isArchived = false,
   isPinned = false,
   isRenaming = false,
@@ -183,9 +189,13 @@ export function TaskItem({
           
           {status === 'ongoing' && (
             <div className="flex items-center gap-2">
-              <span className={`animate-pulse bg-gradient-to-r from-muted-foreground via-muted-foreground to-muted-foreground/50 bg-[length:200%_100%] bg-clip-text text-transparent ${liveStatus ? 'animate-[shimmer_2s_linear_infinite]' : ''}`}>
-                {liveStatus?.currentStatus || 'Running'}
-              </span>
+              {streamingId ? (
+                <LiveTaskStatus streamingId={streamingId} />
+              ) : (
+                <span className="animate-pulse bg-gradient-to-r from-muted-foreground via-muted-foreground to-muted-foreground/50 bg-[length:200%_100%] bg-clip-text text-transparent">
+                  Running
+                </span>
+              )}
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -270,4 +280,4 @@ export function TaskItem({
       </a>
     </div>
   );
-}
+});

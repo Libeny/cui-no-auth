@@ -203,7 +203,7 @@ export function TaskList({
             status={conversation.status}
             messageCount={conversation.messageCount}
             toolMetrics={conversation.toolMetrics}
-            liveStatus={conversation.liveStatus}
+            streamingId={conversation.streamingId}
             isArchived={activeTab === 'archive'}
             isPinned={conversation.sessionInfo.pinned}
             onClick={() => handleTaskClick(conversation.sessionId)}

@@ -7,8 +7,16 @@ import { api } from '../../services/api';
 import { useStreaming, useConversationMessages } from '../../hooks';
 import type { ChatMessage, ConversationDetailsResponse, ConversationMessage, ConversationSummary } from '../../types';
 
+// Wrapper component to force full remount on session change
 export function ConversationView() {
   const { sessionId } = useParams<{ sessionId: string }>();
+  // Use sessionId as key to force complete remount of the content component
+  // This ensures all state (messages, streaming, etc.) is reset instantly without stale data flash
+  return <ConversationViewContent key={sessionId} sessionId={sessionId} />;
+}
+
+// Inner component with actual logic
+function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [streamingId, setStreamingId] = useState<string | null>(null);
@@ -19,6 +27,10 @@ export function ConversationView() {
   const [conversationSummary, setConversationSummary] = useState<ConversationSummary | null>(null);
   const [currentWorkingDirectory, setCurrentWorkingDirectory] = useState<string>('');
   const composerRef = useRef<ComposerRef>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  // activeSessionIdRef is no longer strictly needed for race conditions due to key={sessionId}, 
+  // but kept for safety in async callbacks
+  const activeSessionIdRef = useRef<string | null>(sessionId || null);
 
   // Use shared conversation messages hook
   const {
@@ -60,21 +72,26 @@ export function ConversationView() {
     }
   }, [location]);
 
-  // Clear streaming when navigating away or sessionId changes
+  // Cleanup on unmount
   useEffect(() => {
-    // Clear streamingId when sessionId changes
-    setStreamingId(null);
-    
     return () => {
-      // Clear streaming when navigating away
-      setStreamingId(null);
+      // Cancel pending request and clear streaming when unmounting
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
     };
-  }, [sessionId]);
+  }, []);
 
   // Fetch conversation data
   const fetchConversation = useCallback(async (showLoading = true, shouldFocus = true) => {
     if (!sessionId) return;
-    
+
+    // Cancel any previous request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
     if (showLoading) {
       setIsLoading(true);
       setError(null);
@@ -82,10 +99,18 @@ export function ConversationView() {
 
     try {
       const details = await api.getConversationDetails(sessionId);
+
+      console.log('[ConversationView] API 返回数据:', {
+        messagesCount: details.messages?.length,
+        totalMessages: details.totalMessages
+      });
+
       const chatMessages = convertToChatlMessages(details);
-      
-      // Always load fresh messages from backend
+      console.log('[ConversationView] 转换后消息数:', chatMessages.length);
+
+      // Load all messages from backend
       setAllMessages(chatMessages);
+      console.log('[ConversationView] setAllMessages 已调用');
       
       // Set working directory from the most recent message with a working directory
       const messagesWithCwd = chatMessages.filter(msg => msg.workingDirectory);
@@ -98,6 +123,7 @@ export function ConversationView() {
       
       // Check if this conversation has an active stream
       const conversationsResponse = await api.getConversations({ limit: 100 });
+
       const currentConversation = conversationsResponse.conversations.find(
         conv => conv.sessionId === sessionId
       );
@@ -114,9 +140,9 @@ export function ConversationView() {
           setStreamingId(currentConversation.streamingId);
           
           try {
-            const { permissions } = await api.getPermissions({ 
-              streamingId: currentConversation.streamingId, 
-              status: 'pending' 
+            const { permissions } = await api.getPermissions({
+              streamingId: currentConversation.streamingId,
+              status: 'pending'
             });
             
             if (permissions.length > 0) {
@@ -134,6 +160,9 @@ export function ConversationView() {
         }
       }
     } catch (err: any) {
+      // Ignore AbortError as it's intentional
+      if (err.name === 'AbortError') return;
+
       if (showLoading) setError(err.message || 'Failed to load conversation');
       console.error('Failed to refresh conversation:', err);
     } finally {
@@ -153,14 +182,94 @@ export function ConversationView() {
     fetchConversation(true, true);
   }, [fetchConversation]);
 
-  // Listen for external updates (from file watcher)
-  useStreaming('global', {
+  // Listen for content updates on session-specific stream
+  // Only connect AFTER initial load is complete to prevent connection flooding during rapid switching
+  const sessionStreamId = (!isLoading && sessionId) ? `session-${sessionId}` : null;
+  useStreaming(sessionStreamId, {
     onMessage: (event) => {
-      if (event.type === 'index_update' && event.sessionId === sessionId) {
-        fetchConversation(false, false);
+      if (event.type === 'session_content_update') {
+        // Handle real-time content updates for this session
+        const { messages: newMessages } = event.data;
+
+        if (newMessages && Array.isArray(newMessages)) {
+          console.log('[ConversationView] Received content update, new messages:', newMessages.length);
+
+          // Add each new message to the conversation
+          newMessages.forEach((msg: any) => {
+            handleStreamMessage(msg);
+          });
+        }
       }
     }
   });
+
+  // Subscribe to session content updates (for historical/completed sessions)
+  useEffect(() => {
+    if (!sessionId || isLoading) return;
+
+    // Generate or retrieve client ID
+    let clientId = sessionStorage.getItem('cui-client-id');
+    if (!clientId) {
+      clientId = `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      sessionStorage.setItem('cui-client-id', clientId);
+    }
+
+    // Subscribe to this session
+    const subscribe = async () => {
+      try {
+        console.log('[ConversationView] Subscribing to session:', sessionId, 'clientId:', clientId);
+
+        const response = await fetch('/api/subscriptions/subscribe', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-client-id': clientId
+          },
+          body: JSON.stringify({ sessionId })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log('[ConversationView] Subscribed:', data);
+        } else {
+          console.warn('[ConversationView] Subscribe failed:', response.statusText);
+        }
+      } catch (error) {
+        console.error('[ConversationView] Subscribe error:', error);
+      }
+    };
+
+    // Only subscribe if we don't have an active streaming connection
+    // AND if the session is not "ongoing" according to our local state
+    // (This prevents double-updates during active generation)
+    if (!streamingId) {
+      subscribe();
+    }
+
+    // Cleanup: Unsubscribe when leaving
+    return () => {
+      const unsubscribe = async () => {
+        try {
+          console.log('[ConversationView] Unsubscribing from session:', sessionId, 'clientId:', clientId);
+
+          await fetch('/api/subscriptions/unsubscribe', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-client-id': clientId
+            },
+            body: JSON.stringify({ sessionId })
+          });
+
+          console.log('[ConversationView] Unsubscribed');
+        } catch (error) {
+          console.error('[ConversationView] Unsubscribe error:', error);
+        }
+      };
+
+      unsubscribe();
+    };
+  }, [sessionId, streamingId, isLoading]);
 
   const { isConnected, disconnect } = useStreaming(streamingId, {
     onMessage: handleStreamMessage,
@@ -288,7 +397,7 @@ export function ConversationView() {
       />
       
       {error && (
-        <div 
+        <div
           className="bg-red-500/10 border-b border-red-500 text-red-600 dark:text-red-400 px-4 py-2 text-sm text-center animate-in slide-in-from-top duration-300"
           role="alert"
           aria-label="Error message"
@@ -297,7 +406,7 @@ export function ConversationView() {
         </div>
       )}
 
-      <MessageList 
+      <MessageList
         messages={messages}
         toolResults={toolResults}
         childrenMessages={childrenMessages}
@@ -357,21 +466,32 @@ export function ConversationView() {
 
 // Helper function to convert API response to chat messages
 function convertToChatlMessages(details: ConversationDetailsResponse): ChatMessage[] {
+  console.log('[convertToChatlMessages] 开始转换, 输入消息数:', details.messages?.length);
+
+  if (!details.messages || !Array.isArray(details.messages)) {
+    console.error('[convertToChatlMessages] messages 不是数组!', details);
+    return [];
+  }
+
   // Create a map for quick parent message lookup
   const messageMap = new Map<string, ConversationMessage>();
   details.messages.forEach(msg => messageMap.set(msg.uuid, msg));
 
-  return details.messages
-    .filter(msg => !msg.isSidechain) // Filter out sidechain messages
-    .map(msg => {
+  const filtered = details.messages
+    .filter(msg => !msg.isSidechain)
+    .filter(msg => msg.message); // Skip messages without message field (system errors, etc.)
+
+  console.log('[convertToChatlMessages] 过滤后:', filtered.length);
+
+  const result = filtered.map(msg => {
       // Extract content from the message structure
       let content = msg.message;
-      
+
       // Handle Anthropic message format
       if (typeof msg.message === 'object' && 'content' in msg.message) {
         content = msg.message.content;
       }
-      
+
       return {
         id: msg.uuid,
         messageId: msg.uuid, // For historical messages, use UUID as messageId
@@ -381,4 +501,7 @@ function convertToChatlMessages(details: ConversationDetailsResponse): ChatMessa
         workingDirectory: msg.cwd, // Add working directory from backend message
       };
     });
+
+  console.log('[convertToChatlMessages] 转换完成, 返回消息数:', result.length);
+  return result;
 }

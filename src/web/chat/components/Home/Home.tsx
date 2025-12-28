@@ -66,7 +66,9 @@ export function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
-  // Auto-refresh on focus
+  // Auto-refresh on focus - REMOVED
+  // Real-time updates are now handled by SSE in ConversationsContext
+  /*
   useEffect(() => {
     const handleFocus = () => {
       // Only refresh if we have loaded conversations before
@@ -91,6 +93,7 @@ export function Home() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [loadConversations, activeTab]);
+  */
 
   // Get the most recent working directory from conversations
   const recentWorkingDirectory = conversations.length > 0 
