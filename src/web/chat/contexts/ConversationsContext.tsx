@@ -20,11 +20,13 @@ interface ConversationsContextType {
     hasContinuation?: boolean;
     archived?: boolean;
     pinned?: boolean;
+    projectPath?: string;
   }, showLoading?: boolean) => Promise<void>;
   loadMoreConversations: (filters?: {
     hasContinuation?: boolean;
     archived?: boolean;
     pinned?: boolean;
+    projectPath?: string;
   }) => Promise<void>;
   getMostRecentWorkingDirectory: () => string | null;
 }
@@ -46,6 +48,14 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
   // Track current state for event handlers
   const conversationsRef = useRef(conversations);
   useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
+
+  // Track active filters so ALL refresh paths (SSE, archive, pin, etc.) reuse them
+  const activeFiltersRef = useRef<{
+    hasContinuation?: boolean;
+    archived?: boolean;
+    pinned?: boolean;
+    projectPath?: string;
+  }>({});
 
   const loadWorkingDirectories = async (): Promise<Record<string, RecentDirectory> | null> => {
     try {
@@ -98,12 +108,21 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     hasContinuation?: boolean;
     archived?: boolean;
     pinned?: boolean;
+    projectPath?: string;
   }, showLoading: boolean = true) => {
+    // When filters are explicitly provided, persist them as active filters.
+    // When filters are undefined (e.g. from TaskList archive/pin/rename),
+    // reuse the last active filters to preserve projectPath filtering.
+    if (filters !== undefined) {
+      activeFiltersRef.current = filters;
+    }
+    const effectiveFilters = filters ?? activeFiltersRef.current;
+
     if (showLoading) {
       setLoading(true);
       setError(null);
     }
-    
+
     try {
       const loadLimit = limit || INITIAL_LIMIT;
       // Load working directories from API in parallel with conversations
@@ -113,7 +132,7 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
           offset: 0,
           sortBy: 'updated',
           order: 'desc',
-          ...filters
+          ...effectiveFilters
         }),
         loadWorkingDirectories()
       ]);
@@ -142,18 +161,22 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     hasContinuation?: boolean;
     archived?: boolean;
     pinned?: boolean;
+    projectPath?: string;
   }) => {
     if (loadingMore || !hasMore) return;
-    
+
+    // Use provided filters or fall back to active filters (preserves projectPath)
+    const effectiveFilters = filters ?? activeFiltersRef.current;
+
     setLoadingMore(true);
     setError(null);
     try {
-      const data = await api.getConversations({ 
+      const data = await api.getConversations({
         limit: LOAD_MORE_LIMIT,
         offset: conversations.length,
         sortBy: 'updated',
         order: 'desc',
-        ...filters
+        ...effectiveFilters
       });
       
       if (data.conversations.length === 0) {
@@ -229,9 +252,9 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
       console.log('[ConversationsContext] onMessage called, event type:', event.type);
       if (event.type === 'index_update') {
         // Refresh the list silently when any session is updated
-        // Use current conversations length to maintain pagination
+        // Reuse active filters (including projectPath) to preserve directory filtering
         const currentCount = conversationsRef.current.length || INITIAL_LIMIT;
-        loadConversations(currentCount, undefined, false);
+        loadConversations(currentCount, activeFiltersRef.current, false);
       } else if (event.type === 'session_list_update') {
         // Handle real-time session list updates
         const { sessionId, eventType, metadata } = event.data;

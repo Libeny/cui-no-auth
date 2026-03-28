@@ -21,6 +21,7 @@ import { ToolMetricsService } from './services/ToolMetricsService.js';
 import { NotificationService } from './services/notification-service.js';
 import { WebPushService } from './services/web-push-service.js';
 import { geminiService } from './services/gemini-service.js';
+import { asrService } from './services/asr-service.js';
 import { ClaudeRouterService } from './services/claude-router-service.js';
 import { HistoryIndexer } from './services/history-indexer.js';
 import { 
@@ -167,7 +168,11 @@ export class CUIServer {
       await this.sessionInfoService.initialize();
       this.logger.debug('Session info service initialized successfully');
 
-      this.logger.debug('Initializing Gemini service');
+      this.logger.debug('Initializing ASR service');
+      await asrService.initialize();
+      this.logger.debug('ASR service initialized successfully');
+
+      this.logger.debug('Initializing Gemini service (for summarization)');
       await geminiService.initialize();
       this.logger.debug('Gemini service initialized successfully');
 
@@ -489,14 +494,15 @@ export class CUIServer {
       this.statusTracker,
       this.sessionInfoService,
       this.conversationStatusManager,
-      this.toolMetricsService
+      this.toolMetricsService,
+      this.configService
     ));
     this.app.use('/api/filesystem', createFileSystemRoutes(this.fileSystemService));
     this.app.use('/api/logs', createLogRoutes());
     this.app.use('/api/stream', createStreamingRoutes(this.streamManager));
     this.app.use('/api/working-directories', createWorkingDirectoriesRoutes(this.workingDirectoriesService));
     this.app.use('/api/config', createConfigRoutes(this.configService));
-    this.app.use('/api/gemini', createGeminiRoutes(geminiService));
+    this.app.use('/api/gemini', createGeminiRoutes(geminiService, asrService));
     
     // React Router catch-all - must be after all API routes
     const isDev = process.env.NODE_ENV === 'development';
@@ -559,9 +565,7 @@ export class CUIServer {
       // Unregister session from status tracker
       this.logger.debug('Unregistering session from status tracker', { streamingId });
       this.statusTracker.unregisterActiveSession(streamingId);
-      
-      // Clean up conversation context (handled automatically in unregisterActiveSession)
-      
+
       // Clean up permissions for this streaming session
       const removedCount = this.permissionTracker.removePermissionsByStreamingId(streamingId);
       if (removedCount > 0) {

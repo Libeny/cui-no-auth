@@ -73,7 +73,7 @@ export function TaskList({
       await api.updateSession(sessionId, { archived: true });
       
       // Refresh the conversations list to ensure consistency
-      loadConversations(undefined, getFiltersForTab(activeTab));
+      loadConversations();
     } catch (error) {
       console.error('Failed to archive task:', error);
       // Restore visibility if the API call fails
@@ -95,7 +95,7 @@ export function TaskList({
       await api.updateSession(sessionId, { archived: false });
       
       // Refresh the conversations list to ensure consistency
-      loadConversations(undefined, getFiltersForTab(activeTab));
+      loadConversations();
     } catch (error) {
       console.error('Failed to unarchive task:', error);
       // Restore visibility if the API call fails
@@ -108,7 +108,7 @@ export function TaskList({
   const handleNameUpdate = async () => {
     // Clear renaming state and refresh the conversations list
     setRenamingSessionId(null);
-    await loadConversations(undefined, getFiltersForTab(activeTab));
+    await loadConversations();
   };
 
   const handleStartRename = (sessionId: string) => {
@@ -121,7 +121,7 @@ export function TaskList({
 
   const handlePinToggle = async () => {
     // Refresh the conversations list to ensure consistency with new pin state
-    loadConversations(undefined, getFiltersForTab(activeTab));
+    loadConversations();
   };
 
   // Sort conversations: pinned items first, then by updatedAt

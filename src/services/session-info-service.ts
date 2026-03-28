@@ -25,6 +25,11 @@ type SessionRow = {
   model: string | null;
   last_scanned_at: number | null;
   file_path: string | null;
+  // Tool metrics
+  lines_added: number | null;
+  lines_removed: number | null;
+  edit_count: number | null;
+  write_count: number | null;
 };
 
 /**
@@ -144,7 +149,12 @@ export class SessionInfoService {
       { name: 'total_duration', type: 'INTEGER', default: 'NULL' },
       { name: 'model', type: 'TEXT', default: 'NULL' },
       { name: 'last_scanned_at', type: 'INTEGER', default: 'NULL' },
-      { name: 'file_path', type: 'TEXT', default: 'NULL' }
+      { name: 'file_path', type: 'TEXT', default: 'NULL' },
+      // Tool metrics
+      { name: 'lines_added', type: 'INTEGER', default: 'NULL' },
+      { name: 'lines_removed', type: 'INTEGER', default: 'NULL' },
+      { name: 'edit_count', type: 'INTEGER', default: 'NULL' },
+      { name: 'write_count', type: 'INTEGER', default: 'NULL' }
     ];
 
     const tableInfo = this.db.pragma('table_info(sessions)') as { name: string }[];
@@ -169,11 +179,13 @@ export class SessionInfoService {
       INSERT INTO sessions (
         session_id, custom_name, created_at, updated_at, version,
         pinned, archived, continuation_session_id, initial_commit_head, permission_mode,
-        summary, project_path, message_count, total_duration, model, last_scanned_at, file_path
+        summary, project_path, message_count, total_duration, model, last_scanned_at, file_path,
+        lines_added, lines_removed, edit_count, write_count
       ) VALUES (
         @session_id, @custom_name, @created_at, @updated_at, @version,
         @pinned, @archived, @continuation_session_id, @initial_commit_head, @permission_mode,
-        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at, @file_path
+        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at, @file_path,
+        @lines_added, @lines_removed, @edit_count, @write_count
       )
     `);
 
@@ -193,18 +205,24 @@ export class SessionInfoService {
         total_duration=COALESCE(@total_duration, total_duration),
         model=COALESCE(@model, model),
         last_scanned_at=COALESCE(@last_scanned_at, last_scanned_at),
-        file_path=COALESCE(@file_path, file_path)
+        file_path=COALESCE(@file_path, file_path),
+        lines_added=COALESCE(@lines_added, lines_added),
+        lines_removed=COALESCE(@lines_removed, lines_removed),
+        edit_count=COALESCE(@edit_count, edit_count),
+        write_count=COALESCE(@write_count, write_count)
       WHERE session_id=@session_id
     `);
 
     // Specialized statement for the indexer to update indexed fields without touching user preferences
     this.updateIndexedDataStmt = this.db.prepare(`
       INSERT INTO sessions (
-        session_id, created_at, updated_at, version, 
-        summary, project_path, message_count, total_duration, model, last_scanned_at, file_path
+        session_id, created_at, updated_at, version,
+        summary, project_path, message_count, total_duration, model, last_scanned_at, file_path,
+        lines_added, lines_removed, edit_count, write_count
       ) VALUES (
         @session_id, @created_at, @updated_at, 3,
-        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at, @file_path
+        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at, @file_path,
+        @lines_added, @lines_removed, @edit_count, @write_count
       )
       ON CONFLICT(session_id) DO UPDATE SET
         summary=excluded.summary,
@@ -214,6 +232,10 @@ export class SessionInfoService {
         model=excluded.model,
         last_scanned_at=excluded.last_scanned_at,
         file_path=excluded.file_path,
+        lines_added=excluded.lines_added,
+        lines_removed=excluded.lines_removed,
+        edit_count=excluded.edit_count,
+        write_count=excluded.write_count,
         updated_at=excluded.updated_at
     `);
 
@@ -253,7 +275,12 @@ export class SessionInfoService {
       total_duration: row.total_duration || undefined,
       model: row.model || undefined,
       last_scanned_at: row.last_scanned_at || undefined,
-      file_path: row.file_path || undefined
+      file_path: row.file_path || undefined,
+      // Tool metrics
+      lines_added: row.lines_added ?? undefined,
+      lines_removed: row.lines_removed ?? undefined,
+      edit_count: row.edit_count ?? undefined,
+      write_count: row.write_count ?? undefined
     };
   }
 
@@ -294,7 +321,11 @@ export class SessionInfoService {
         total_duration: null,
         model: null,
         last_scanned_at: null,
-        file_path: null
+        file_path: null,
+        lines_added: null,
+        lines_removed: null,
+        edit_count: null,
+        write_count: null
       });
       
       this.setMetadataStmt.run({ key: 'last_updated', value: now });
@@ -340,6 +371,10 @@ export class SessionInfoService {
         model: undefined,
         last_scanned_at: undefined,
         file_path: undefined,
+        lines_added: undefined,
+        lines_removed: undefined,
+        edit_count: undefined,
+        write_count: undefined,
         ...updates
       };
 
@@ -360,7 +395,11 @@ export class SessionInfoService {
         total_duration: merged.total_duration || null,
         model: merged.model || null,
         last_scanned_at: merged.last_scanned_at || null,
-        file_path: merged.file_path || null
+        file_path: merged.file_path || null,
+        lines_added: merged.lines_added ?? null,
+        lines_removed: merged.lines_removed ?? null,
+        edit_count: merged.edit_count ?? null,
+        write_count: merged.write_count ?? null
       };
 
       if (existingRow) {
@@ -392,6 +431,10 @@ export class SessionInfoService {
     createdAt?: string;
     updatedAt?: string;
     filePath?: string;
+    linesAdded?: number;
+    linesRemoved?: number;
+    editCount?: number;
+    writeCount?: number;
   }>): Promise<void> {
     if (items.length === 0) return;
 
@@ -409,7 +452,11 @@ export class SessionInfoService {
             total_duration: row.totalDuration || null,
             model: row.model || null,
             last_scanned_at: row.lastScannedAt,
-            file_path: row.filePath || null
+            file_path: row.filePath || null,
+            lines_added: row.linesAdded ?? null,
+            lines_removed: row.linesRemoved ?? null,
+            edit_count: row.editCount ?? null,
+            write_count: row.writeCount ?? null
           });
           changes += info.changes;
         }

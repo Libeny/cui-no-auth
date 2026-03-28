@@ -6,6 +6,7 @@ import { Header } from './Header';
 import { Composer, ComposerRef } from '@/web/chat/components/Composer';
 import { TaskTabs } from './TaskTabs';
 import { TaskList } from './TaskList';
+import type { EnvPreset } from '../../types';
 
 export function Home() {
   const navigate = useNavigate();
@@ -22,6 +23,9 @@ export function Home() {
   } = useConversations();
   const [activeTab, setActiveTab] = useState<'tasks' | 'history' | 'archive'>('tasks');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedDirectory, setSelectedDirectory] = useState<string | undefined>(undefined);
+  const [envPresets, setEnvPresets] = useState<EnvPreset[]>([]);
+  const [selectedEnvPresetId, setSelectedEnvPresetId] = useState<string | undefined>(undefined);
   const conversationCountRef = useRef(conversations.length);
   const composerRef = useRef<ComposerRef>(null);
 
@@ -30,25 +34,33 @@ export function Home() {
     conversationCountRef.current = conversations.length;
   }, [conversations.length]);
 
-  // Get filter parameters based on active tab
-  const getFiltersForTab = (tab: 'tasks' | 'history' | 'archive') => {
-    switch (tab) {
-      case 'tasks':
-        return { archived: false, hasContinuation: false };
-      case 'history':
-        return { hasContinuation: true };
-      case 'archive':
-        return { archived: true, hasContinuation: false };
-      default:
-        return {};
-    }
+  // Load env presets on mount
+  useEffect(() => {
+    api.getEnvPresets().then(setEnvPresets).catch(() => { /* ignore */ });
+  }, []);
+
+  // Get filter parameters based on active tab + selected directory
+  const getFiltersForTab = (tab: 'tasks' | 'history' | 'archive', projectPath?: string) => {
+    const base = (() => {
+      switch (tab) {
+        case 'tasks':
+          return { archived: false, hasContinuation: false };
+        case 'history':
+          return { hasContinuation: true };
+        case 'archive':
+          return { archived: true, hasContinuation: false };
+        default:
+          return {};
+      }
+    })();
+    return projectPath ? { ...base, projectPath } : base;
   };
 
   // Auto-refresh on navigation back to Home
   useEffect(() => {
     // Refresh on component mount if we have conversations
     if (conversationCountRef.current > 0) {
-      loadConversations(conversationCountRef.current, getFiltersForTab(activeTab));
+      loadConversations(conversationCountRef.current, getFiltersForTab(activeTab, selectedDirectory));
     }
     
     // Focus the input after a brief delay to ensure DOM is ready
@@ -60,11 +72,13 @@ export function Home() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty dependency array means this runs only on mount
 
-  // Reload conversations when tab changes
+  // Reload conversations when tab or directory changes
   useEffect(() => {
-    loadConversations(undefined, getFiltersForTab(activeTab));
+    const filters = getFiltersForTab(activeTab, selectedDirectory);
+    console.log('[Home] Loading conversations with filters:', filters);
+    loadConversations(undefined, filters);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, [activeTab, selectedDirectory]);
 
   // Auto-refresh on focus - REMOVED
   // Real-time updates are now handled by SSE in ConversationsContext
@@ -100,17 +114,18 @@ export function Home() {
     ? conversations[0].projectPath 
     : undefined;
 
-  const handleComposerSubmit = async (text: string, workingDirectory: string, model: string, permissionMode: string) => {
+  const handleComposerSubmit = async (text: string, workingDirectory?: string, model?: string, permissionMode?: string, envPresetId?: string) => {
     setIsSubmitting(true);
-    
+
     try {
       const response = await api.startConversation({
-        workingDirectory,
+        workingDirectory: workingDirectory || '',
         initialPrompt: text,
         model: model === 'default' ? undefined : model,
         permissionMode: permissionMode === 'default' ? undefined : permissionMode,
+        envPresetId: envPresetId || undefined,
       });
-      
+
       // Navigate to the conversation page
       navigate(`/c/${response.sessionId}`);
     } catch (error) {
@@ -159,6 +174,9 @@ export function Home() {
                   recentDirectories={recentDirectories}
                   getMostRecentWorkingDirectory={getMostRecentWorkingDirectory}
                   onDirectoryChange={(directory) => {
+                    // Filter session list by selected directory
+                    console.log('[Home] Directory changed:', directory);
+                    setSelectedDirectory(directory);
                     // Focus input after directory change
                     setTimeout(() => {
                       composerRef.current?.focusInput();
@@ -170,6 +188,9 @@ export function Home() {
                       composerRef.current?.focusInput();
                     }, 50);
                   }}
+                  envPresets={envPresets}
+                  selectedEnvPresetId={selectedEnvPresetId}
+                  onEnvPresetChange={setSelectedEnvPresetId}
                   onFetchFileSystem={async (directory) => {
                     const response = await api.listDirectory({
                       path: directory,
@@ -198,7 +219,7 @@ export function Home() {
               hasMore={hasMore}
               error={error}
               activeTab={activeTab}
-              onLoadMore={(filters) => loadMoreConversations(filters)}
+              onLoadMore={(filters) => loadMoreConversations(selectedDirectory ? { ...filters, projectPath: selectedDirectory } : filters)}
             />
           </div>
         </div>

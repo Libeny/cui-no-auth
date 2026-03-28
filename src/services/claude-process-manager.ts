@@ -506,8 +506,14 @@ export class ClaudeProcessManager extends EventEmitter {
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { NODE_OPTIONS, VSCODE_INSPECTOR_OPTIONS, ...cleanEnv } = spawnConfig.env;
       
+      // Merge per-conversation env overrides (from env presets) before CUI_STREAMING_ID
+      // CUI_STREAMING_ID must not be overridden by user presets
+      const envWithOverrides = config.envOverrides
+        ? { ...cleanEnv, ...config.envOverrides }
+        : cleanEnv;
+
       const envWithStreamingId = {
-        ...cleanEnv,
+        ...envWithOverrides,
         CUI_STREAMING_ID: streamingId,
         PWD: spawnConfig.cwd,
         INIT_CWD: spawnConfig.cwd
@@ -962,6 +968,11 @@ export class ClaudeProcessManager extends EventEmitter {
     this.processes.delete(streamingId);
     this.outputBuffers.delete(streamingId);
     const config = this.conversationConfigs.get(streamingId);
+    // Release large objects before deleting to help GC (prevents OOM)
+    if (config?.previousMessages) {
+      config.previousMessages.length = 0;
+      config.previousMessages = undefined as unknown as typeof config.previousMessages;
+    }
     this.conversationConfigs.delete(streamingId);
     
     // Send notification if service is available

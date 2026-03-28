@@ -3,6 +3,14 @@
  */
 import { RouterConfiguration } from './router-config.js';
 
+export interface EnvPreset {
+  id: string;           // uuid
+  name: string;         // e.g. "Clash", "Corporate VPN"
+  proxy?: string;       // e.g. http://127.0.0.1:7897
+  noProxy?: string;     // e.g. localhost,127.0.0.1
+  envVars?: Record<string, string>;  // e.g. { ANTHROPIC_BASE_URL: "..." }
+}
+
 export interface ServerConfig {
   host: string;
   port: number;
@@ -14,10 +22,40 @@ export interface GeminiConfig {
    * Can also be set via GOOGLE_API_KEY environment variable
    */
   apiKey?: string;
-  
+
   /**
    * Gemini model to use
    * Default: 'gemini-2.5-flash'
+   */
+  model?: string;
+}
+
+/**
+ * Supported ASR (Automatic Speech Recognition) providers
+ */
+export type ASRProvider = 'gemini' | 'glm';
+
+/**
+ * ASR configuration for voice input
+ */
+export interface ASRConfig {
+  /**
+   * ASR provider to use
+   * Default: 'gemini'
+   */
+  provider?: ASRProvider;
+
+  /**
+   * API key for the selected provider
+   * - For 'gemini': Can also be set via GOOGLE_API_KEY environment variable
+   * - For 'glm': Can also be set via ZHIPUAI_API_KEY environment variable
+   */
+  apiKey?: string;
+
+  /**
+   * Model to use for transcription
+   * - For 'gemini': Default 'gemini-2.5-flash'
+   * - For 'glm': Default 'glm-asr-2512'
    */
   model?: string;
 }
@@ -57,8 +95,15 @@ export interface CUIConfig {
 
   /**
    * Gemini API configuration (optional)
+   * @deprecated Use 'asr' configuration instead
    */
   gemini?: GeminiConfig;
+
+  /**
+   * ASR (Automatic Speech Recognition) configuration (optional)
+   * Configures voice input transcription service
+   */
+  asr?: ASRConfig;
 
   /**
    * Optional router configuration for Claude Code Router
@@ -69,6 +114,11 @@ export interface CUIConfig {
    * Interface preferences and settings
    */
   interface: InterfaceConfig;
+
+  /**
+   * Environment presets for proxy/env configuration
+   */
+  envPresets?: EnvPreset[];
 }
 
 /**

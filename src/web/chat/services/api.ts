@@ -12,6 +12,7 @@ import type {
   FileSystemListResponse,
   CommandsResponse,
 } from '../types';
+import type { EnvPreset } from '../../../types/config';
 import { getAuthToken } from '../../hooks/useAuth';
 type GeminiHealthResponse = { status: 'healthy' | 'unhealthy'; message: string; apiKeyValid: boolean };
 
@@ -213,6 +214,32 @@ class ApiService {
     return this.apiCall('/api/config', {
       method: 'PUT',
       body: JSON.stringify(updates),
+    });
+  }
+
+  // --- Env Presets ---
+
+  async getEnvPresets(): Promise<EnvPreset[]> {
+    return this.apiCall('/api/config/env-presets');
+  }
+
+  async createEnvPreset(preset: Omit<EnvPreset, 'id'>): Promise<EnvPreset> {
+    return this.apiCall('/api/config/env-presets', {
+      method: 'POST',
+      body: JSON.stringify(preset),
+    });
+  }
+
+  async updateEnvPreset(id: string, preset: Partial<EnvPreset>): Promise<EnvPreset> {
+    return this.apiCall(`/api/config/env-presets/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(preset),
+    });
+  }
+
+  async deleteEnvPreset(id: string): Promise<{ success: boolean }> {
+    return this.apiCall(`/api/config/env-presets/${id}`, {
+      method: 'DELETE',
     });
   }
 

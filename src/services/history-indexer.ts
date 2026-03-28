@@ -3,6 +3,7 @@ import * as fsPromises from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as readline from 'readline';
+import { diffLines } from 'diff';
 import { createLogger, type Logger } from './logger.js';
 import { SessionInfoService } from './session-info-service.js';
 import { StreamManager } from './stream-manager.js';
@@ -19,6 +20,11 @@ interface IndexedMetadata {
   updatedAt?: string;
   lastScannedAt: number;
   filePath?: string;
+  // Tool metrics
+  linesAdded?: number;
+  linesRemoved?: number;
+  editCount?: number;
+  writeCount?: number;
 }
 
 export class HistoryIndexer {
@@ -244,6 +250,12 @@ export class HistoryIndexer {
       let foundModel = false;
       let firstUserMessage = '';
 
+      // Tool metrics
+      let linesAdded = 0;
+      let linesRemoved = 0;
+      let editCount = 0;
+      let writeCount = 0;
+
       rl.on('line', (line) => {
         try {
           if (!line.trim()) return;
@@ -297,6 +309,53 @@ export class HistoryIndexer {
                  }
               }
             }
+
+            // Extract tool metrics from assistant messages
+            if (entry.type === 'assistant' && entry.message && typeof entry.message === 'object') {
+              const msg = entry.message as any;
+              if (Array.isArray(msg.content)) {
+                for (const block of msg.content) {
+                  if (block.type !== 'tool_use') continue;
+                  const toolName = block.name;
+                  const input = block.input as Record<string, any> | undefined;
+                  if (!input) continue;
+
+                  if (toolName === 'Edit') {
+                    editCount++;
+                    const oldStr = input.old_string;
+                    const newStr = input.new_string;
+                    if (typeof oldStr === 'string' && typeof newStr === 'string') {
+                      for (const change of diffLines(oldStr, newStr)) {
+                        if (change.added) linesAdded += change.count || 0;
+                        else if (change.removed) linesRemoved += change.count || 0;
+                      }
+                    }
+                  } else if (toolName === 'MultiEdit') {
+                    const edits = input.edits as Array<{ old_string?: string; new_string?: string }> | undefined;
+                    if (Array.isArray(edits)) {
+                      editCount += edits.length;
+                      for (const edit of edits) {
+                        const oldStr = edit.old_string;
+                        const newStr = edit.new_string;
+                        if (typeof oldStr === 'string' && typeof newStr === 'string') {
+                          for (const change of diffLines(oldStr, newStr)) {
+                            if (change.added) linesAdded += change.count || 0;
+                            else if (change.removed) linesRemoved += change.count || 0;
+                          }
+                        }
+                      }
+                    }
+                  } else if (toolName === 'Write') {
+                    writeCount++;
+                    const content = input.content;
+                    if (typeof content === 'string' && content.length > 0) {
+                      const lines = content.split('\n');
+                      linesAdded += lines[lines.length - 1] === '' ? lines.length - 1 : lines.length;
+                    }
+                  }
+                }
+              }
+            }
           }
           
         } catch (e) {
@@ -325,7 +384,12 @@ export class HistoryIndexer {
           model,
           createdAt: firstTimestamp || new Date(mtime).toISOString(),
           updatedAt: lastTimestamp || new Date(mtime).toISOString(),
-          lastScannedAt: mtime
+          lastScannedAt: mtime,
+          // Tool metrics (only include if there were any tool operations)
+          linesAdded: (linesAdded || linesRemoved || editCount || writeCount) ? linesAdded : undefined,
+          linesRemoved: (linesAdded || linesRemoved || editCount || writeCount) ? linesRemoved : undefined,
+          editCount: (linesAdded || linesRemoved || editCount || writeCount) ? editCount : undefined,
+          writeCount: (linesAdded || linesRemoved || editCount || writeCount) ? writeCount : undefined
         });
       });
 

@@ -5,7 +5,7 @@ import { Composer, ComposerRef } from '@/web/chat/components/Composer';
 import { ConversationHeader } from '../ConversationHeader/ConversationHeader';
 import { api } from '../../services/api';
 import { useStreaming, useConversationMessages } from '../../hooks';
-import type { ChatMessage, ConversationDetailsResponse, ConversationMessage, ConversationSummary } from '../../types';
+import type { ChatMessage, ConversationDetailsResponse, ConversationMessage, ConversationSummary, EnvPreset } from '../../types';
 
 // Wrapper component to force full remount on session change
 export function ConversationView() {
@@ -26,6 +26,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   const [isPermissionDecisionLoading, setIsPermissionDecisionLoading] = useState(false);
   const [conversationSummary, setConversationSummary] = useState<ConversationSummary | null>(null);
   const [currentWorkingDirectory, setCurrentWorkingDirectory] = useState<string>('');
+  const [envPresets, setEnvPresets] = useState<EnvPreset[]>([]);
   const composerRef = useRef<ComposerRef>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   // activeSessionIdRef is no longer strictly needed for race conditions due to key={sessionId}, 
@@ -61,6 +62,11 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
       setStreamingId(null);
     },
   });
+
+  // Load env presets for the composer
+  useEffect(() => {
+    api.getEnvPresets().then(setEnvPresets).catch(() => { /* ignore */ });
+  }, []);
 
   // Clear navigation state to prevent issues on refresh
   useEffect(() => {
@@ -279,7 +285,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
     },
   });
 
-  const handleSendMessage = async (message: string, workingDirectory?: string, model?: string, permissionMode?: string) => {
+  const handleSendMessage = async (message: string, workingDirectory?: string, model?: string, permissionMode?: string, envPresetId?: string) => {
     if (!sessionId) return;
 
     setError(null);
@@ -290,11 +296,18 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
         initialPrompt: message,
         workingDirectory: workingDirectory || currentWorkingDirectory,
         model,
-        permissionMode
+        permissionMode: (permissionMode && permissionMode !== 'default') ? permissionMode : 'bypassPermissions',
+        envPresetId: envPresetId || undefined,
       });
 
-      // Navigate immediately to the new session
-      navigate(`/c/${response.sessionId}`);
+      if (response.sessionId === sessionId) {
+        // Same sessionId (--resume reuses it) — stay on page, connect to new stream
+        setStreamingId(response.streamingId);
+      } else {
+        // Different sessionId — resume likely failed, warn user and navigate
+        setError(`Resume failed: started new session ${response.sessionId.slice(0, 8)}... instead of continuing. Check proxy/API settings.`);
+        navigate(`/c/${response.sessionId}`);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to send message');
     }
@@ -431,9 +444,11 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
             permissionRequest={currentPermissionRequest}
             showPermissionUI={true}
             showStopButton={true}
+            showModelSelector={true}
             enableFileAutocomplete={true}
             dropdownPosition="above"
             workingDirectory={conversationSummary?.projectPath}
+            envPresets={envPresets}
             onFetchFileSystem={async (directory) => {
               try {
                 const response = await api.listDirectory({

@@ -97,7 +97,9 @@ class LoggerService {
   private static instance: LoggerService;
   private baseLogger: PinoLogger;
   private logInterceptStream: PassThrough;
+  // Daily rotation: clear cache when date changes (OOM fix)
   private childLoggers: Map<string, PinoLogger> = new Map();
+  private childLoggersDate: string = '';
 
   private constructor() {
     // Get log level from environment variable, default to 'info'
@@ -155,6 +157,13 @@ class LoggerService {
    * Create a child logger with context
    */
   child(context: LogContext): CUILogger {
+    // Clear cache daily — prevents unbounded growth while keeping today's loggers
+    const today = new Date().toISOString().slice(0, 10);
+    if (today !== this.childLoggersDate) {
+      this.childLoggers.clear();
+      this.childLoggersDate = today;
+    }
+
     const contextKey = JSON.stringify(context);
     if (!this.childLoggers.has(contextKey)) {
       this.childLoggers.set(contextKey, this.baseLogger.child(context));

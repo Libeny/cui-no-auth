@@ -10,11 +10,34 @@ import { diffLines } from 'diff';
  */
 export class ToolMetricsService extends EventEmitter {
   private metrics: Map<string, ToolMetrics> = new Map();
+  private metricsTimestamps: Map<string, number> = new Map(); // sessionId -> last update epoch ms
+  private lastSweepTime: number = 0;
+  private retentionDays: number;
   private logger: Logger;
 
-  constructor() {
+  constructor(retentionDays: number = 7) {
     super();
+    this.retentionDays = retentionDays;
     this.logger = createLogger('ToolMetricsService');
+  }
+
+  /**
+   * Sweep expired entries (older than retentionDays).
+   * Runs at most once per hour to avoid overhead.
+   */
+  private sweepExpired(): void {
+    const now = Date.now();
+    const ONE_HOUR = 60 * 60 * 1000;
+    if (now - this.lastSweepTime < ONE_HOUR) return;
+    this.lastSweepTime = now;
+
+    const cutoff = now - this.retentionDays * 24 * 60 * 60 * 1000;
+    for (const [sessionId, ts] of this.metricsTimestamps) {
+      if (ts < cutoff) {
+        this.metrics.delete(sessionId);
+        this.metricsTimestamps.delete(sessionId);
+      }
+    }
   }
 
   /**
@@ -39,6 +62,14 @@ export class ToolMetricsService extends EventEmitter {
   getMetrics(sessionId: string): ToolMetrics | undefined {
     const metrics = this.metrics.get(sessionId);
     return metrics;
+  }
+
+  /**
+   * Clear cached metrics for a completed session (prevents OOM from unbounded growth)
+   */
+  clearMetricsForSession(sessionId: string): void {
+    this.metrics.delete(sessionId);
+    this.metricsTimestamps.delete(sessionId);
   }
 
 
@@ -139,8 +170,12 @@ export class ToolMetricsService extends EventEmitter {
       }
     }
 
-    // Update metrics
+    // Sweep expired entries periodically (prevents OOM from unbounded growth)
+    this.sweepExpired();
+
+    // Update metrics + timestamp
     this.metrics.set(sessionId, metrics);
+    this.metricsTimestamps.set(sessionId, Date.now());
     this.logger.debug('Updated metrics', {
       sessionId,
       metrics

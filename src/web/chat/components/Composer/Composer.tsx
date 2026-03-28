@@ -6,11 +6,12 @@ import { WaveformVisualizer } from '../WaveformVisualizer';
 import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
-import type { PermissionRequest, Command } from '../../types';
+import type { PermissionRequest, Command, EnvPreset } from '../../types';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAudioRecording } from '../../hooks/useAudioRecording';
 import { api } from '../../../chat/services/api';
 import { cn } from "../../lib/utils";
+import { EnvPresetDropdown } from './EnvPresetDropdown';
 
 export interface FileSystemEntry {
   name: string;
@@ -31,7 +32,7 @@ export interface ComposerProps {
   // Core functionality
   value?: string;
   onChange?: (value: string) => void;
-  onSubmit: (message: string, workingDirectory?: string, model?: string, permissionMode?: string) => void;
+  onSubmit: (message: string, workingDirectory?: string, model?: string, permissionMode?: string, envPresetId?: string) => void;
   placeholder?: string;
   isLoading?: boolean;
   disabled?: boolean;
@@ -53,6 +54,12 @@ export interface ComposerProps {
   model?: string;
   onModelChange?: (model: string) => void;
   availableModels?: string[];
+
+  // Env preset selection
+  envPresets?: EnvPreset[];
+  selectedEnvPresetId?: string;
+  onEnvPresetChange?: (presetId: string | undefined) => void;
+  onManageEnvPresets?: () => void;
 
   // Permission handling
   permissionRequest?: PermissionRequest | null;
@@ -312,6 +319,10 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   model = 'default',
   onModelChange,
   availableModels = ['default', 'opus', 'sonnet'],
+  envPresets = [],
+  selectedEnvPresetId,
+  onEnvPresetChange,
+  onManageEnvPresets,
   permissionRequest,
   onPermissionDecision,
   onStop,
@@ -679,9 +690,10 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
       trimmedValue,
       showDirectorySelector ? selectedDirectory : undefined,
       showModelSelector ? selectedModel : undefined,
-      permissionMode
+      permissionMode,
+      selectedEnvPresetId
     );
-    
+
     setValue('');
     resetAutocomplete();
   };
@@ -889,7 +901,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
             
           </div>
 
-          {(showDirectorySelector || showModelSelector) && audioState === 'idle' && (
+          {(showDirectorySelector || showModelSelector || envPresets.length > 0) && audioState === 'idle' && (
             <div className="absolute bottom-2 left-6 right-10 flex items-center justify-center overflow-visible">
               <div className="flex gap-2 w-full justify-between">
                 <div className="flex gap-2">
@@ -908,6 +920,16 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                       selectedModel={selectedModel}
                       availableModels={availableModels}
                       onModelSelect={handleModelSelect}
+                    />
+                  )}
+
+                  {/* Env Preset Selector */}
+                  {envPresets.length > 0 && (
+                    <EnvPresetDropdown
+                      presets={envPresets}
+                      selectedPresetId={selectedEnvPresetId}
+                      onPresetSelect={(presetId) => onEnvPresetChange?.(presetId)}
+                      onManagePresets={onManageEnvPresets}
                     />
                   )}
                 </div>

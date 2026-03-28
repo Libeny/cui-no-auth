@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { GeminiService } from '@/services/gemini-service.js';
+import { ASRService } from '@/services/asr-service.js';
 import { CUIError } from '@/types/index.js';
 import { createLogger } from '@/services/logger.js';
 import type { RequestWithRequestId } from '@/types/express.js';
@@ -22,15 +23,15 @@ const upload = multer({
   }
 });
 
-export function createGeminiRoutes(geminiService: GeminiService): Router {
+export function createGeminiRoutes(geminiService: GeminiService, asrService: ASRService): Router {
   const router = Router();
   const logger = createLogger('GeminiRoutes');
 
-  // Health check endpoint
+  // Health check endpoint - now checks ASR service (supports multiple providers)
   router.get('/health', async (req: RequestWithRequestId, res, next) => {
     try {
-      logger.debug('Health check requested', { requestId: req.requestId });
-      const result = await geminiService.checkHealth();
+      logger.debug('ASR health check requested', { requestId: req.requestId });
+      const result = await asrService.checkHealth();
       res.json(result);
     } catch (error) {
       next(error);
@@ -38,9 +39,11 @@ export function createGeminiRoutes(geminiService: GeminiService): Router {
   });
 
   // Transcribe endpoint - accepts both file upload and base64
+  // Now supports multiple ASR providers (Gemini, GLM, etc.)
   router.post('/transcribe', upload.single('audio'), async (req: RequestWithRequestId, res, next) => {
     try {
-      logger.debug('Transcribe requested', { requestId: req.requestId });
+      const provider = asrService.getProvider();
+      logger.debug('Transcribe requested', { requestId: req.requestId, provider });
 
       let audio: string;
       let mimeType: string;
@@ -49,26 +52,28 @@ export function createGeminiRoutes(geminiService: GeminiService): Router {
         // Handle file upload
         audio = req.file.buffer.toString('base64');
         mimeType = req.file.mimetype;
-        logger.debug('Processing uploaded audio file', { 
-          mimeType, 
+        logger.debug('Processing uploaded audio file', {
+          mimeType,
           size: req.file.size,
-          requestId: req.requestId 
+          provider,
+          requestId: req.requestId
         });
       } else if (req.body.audio && req.body.mimeType) {
         // Handle base64 input
         const transcribeRequest = req.body as GeminiTranscribeRequest;
         audio = transcribeRequest.audio;
         mimeType = transcribeRequest.mimeType;
-        logger.debug('Processing base64 audio', { 
+        logger.debug('Processing base64 audio', {
           mimeType,
           audioLength: audio.length,
-          requestId: req.requestId 
+          provider,
+          requestId: req.requestId
         });
       } else {
         throw new CUIError('INVALID_REQUEST', 'No audio provided', 400);
       }
 
-      const result = await geminiService.transcribe(audio, mimeType);
+      const result = await asrService.transcribe(audio, mimeType);
       res.json(result);
     } catch (error) {
       next(error);

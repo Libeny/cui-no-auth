@@ -110,6 +110,7 @@ export interface ConversationConfig {
   claudeExecutablePath?: string;
   previousMessages?: ConversationMessage[]; // Messages from previous session for resume context
   permissionMode?: string; // Permission mode: "acceptEdits" | "bypassPermissions" | "default" | "plan"
+  envOverrides?: Record<string, string>; // Environment variable overrides from env preset
 }
 
 // API request/response types
@@ -122,6 +123,7 @@ export interface StartConversationRequest {
   systemPrompt?: string;
   permissionMode?: string; // Permission mode: "acceptEdits" | "bypassPermissions" | "default" | "plan"
   resumedSessionId?: string; // Optional: session ID to resume from
+  envPresetId?: string; // Optional: environment preset ID to apply
 }
 
 
@@ -253,6 +255,12 @@ export interface SessionInfo {
   model?: string;               // Model used
   last_scanned_at?: number;     // Timestamp (ms) when the file was last scanned/indexed
   file_path?: string;           // Full path to the log file (optimization)
+
+  // Tool metrics (persisted from indexer)
+  lines_added?: number;         // Total lines added across all tool operations
+  lines_removed?: number;       // Total lines removed across all tool operations
+  edit_count?: number;          // Number of Edit/MultiEdit tool uses
+  write_count?: number;         // Number of Write tool uses
 }
 
 

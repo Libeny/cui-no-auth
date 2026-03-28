@@ -1,5 +1,5 @@
 import { Router, Request } from 'express';
-import { 
+import {
   StartConversationRequest,
   StartConversationResponse,
   ConversationListQuery,
@@ -18,8 +18,10 @@ import { ClaudeProcessManager } from '@/services/claude-process-manager.js';
 import { ClaudeHistoryReader } from '@/services/claude-history-reader.js';
 import { SessionInfoService } from '@/services/session-info-service.js';
 import { ConversationStatusManager } from '@/services/conversation-status-manager.js';
+import { ConfigService } from '@/services/config-service.js';
 import { createLogger } from '@/services/logger.js';
 import { ToolMetricsService } from '@/services/ToolMetricsService.js';
+import { expandPreset, safeLogEnvOverrides } from '@/utils/env-preset.js';
 
 export function createConversationRoutes(
   processManager: ClaudeProcessManager,
@@ -27,7 +29,8 @@ export function createConversationRoutes(
   statusTracker: ConversationStatusManager,
   sessionInfoService: SessionInfoService,
   conversationStatusManager: ConversationStatusManager,
-  toolMetricsService: ToolMetricsService
+  toolMetricsService: ToolMetricsService,
+  configService?: ConfigService
 ): Router {
   const router = Router();
   const logger = createLogger('ConversationRoutes');
@@ -106,13 +109,33 @@ export function createConversationRoutes(
         }
       }
       
+      // Resolve env preset into envOverrides if envPresetId is provided
+      let envOverrides: Record<string, string> | undefined;
+      if (req.body.envPresetId && configService) {
+        const config = configService.getConfig();
+        const preset = (config.envPresets || []).find(p => p.id === req.body.envPresetId);
+        if (preset) {
+          envOverrides = expandPreset(preset);
+          logger.debug('Resolved env preset', {
+            requestId,
+            presetId: preset.id,
+            presetName: preset.name,
+            envKeys: Object.keys(envOverrides),
+            safeValues: safeLogEnvOverrides(envOverrides)
+          });
+        } else {
+          logger.warn('Env preset not found', { requestId, envPresetId: req.body.envPresetId });
+        }
+      }
+
       // Prepare config with previous messages if resuming
       const conversationConfig = {
         ...req.body,
         previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
-        permissionMode: req.body.permissionMode || inheritedPermissionMode
+        permissionMode: req.body.permissionMode || inheritedPermissionMode,
+        envOverrides
       };
-      
+
       const { streamingId, systemInit } = await processManager.startConversation(conversationConfig);
       
       // Update original session with continuation session ID if resuming
@@ -230,12 +253,22 @@ export function createConversationRoutes(
           status
         };
         
-        // Add toolMetrics if available
+        // Add toolMetrics: prefer in-memory (live), fallback to SQLite (persisted)
         const metrics = toolMetricsService.getMetrics(conversation.sessionId);
         if (metrics) {
           baseConversation.toolMetrics = metrics;
+        } else if (conversation.sessionInfo?.lines_added !== undefined ||
+                   conversation.sessionInfo?.lines_removed !== undefined ||
+                   conversation.sessionInfo?.edit_count !== undefined ||
+                   conversation.sessionInfo?.write_count !== undefined) {
+          baseConversation.toolMetrics = {
+            linesAdded: conversation.sessionInfo.lines_added ?? 0,
+            linesRemoved: conversation.sessionInfo.lines_removed ?? 0,
+            editCount: conversation.sessionInfo.edit_count ?? 0,
+            writeCount: conversation.sessionInfo.write_count ?? 0
+          };
         }
-        
+
         // Add streamingId if conversation is ongoing
         if (status === 'ongoing') {
           const streamingId = statusTracker.getStreamingId(conversation.sessionId);
@@ -316,12 +349,30 @@ export function createConversationRoutes(
           }
         };
         
-        // Add toolMetrics if available
+        // Add toolMetrics: prefer in-memory (live), fallback to SQLite (persisted)
         const metrics = toolMetricsService.getMetrics(req.params.sessionId);
         if (metrics) {
           response.toolMetrics = metrics;
+        } else {
+          // Try to get persisted metrics from SQLite
+          try {
+            const sessionInfo = await sessionInfoService.getSessionInfo(req.params.sessionId);
+            if (sessionInfo.lines_added !== undefined ||
+                sessionInfo.lines_removed !== undefined ||
+                sessionInfo.edit_count !== undefined ||
+                sessionInfo.write_count !== undefined) {
+              response.toolMetrics = {
+                linesAdded: sessionInfo.lines_added ?? 0,
+                linesRemoved: sessionInfo.lines_removed ?? 0,
+                editCount: sessionInfo.edit_count ?? 0,
+                writeCount: sessionInfo.write_count ?? 0
+              };
+            }
+          } catch {
+            // Ignore - no persisted metrics available
+          }
         }
-        
+
         logger.debug('Conversation details retrieved from history', {
           requestId,
           sessionId,

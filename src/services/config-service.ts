@@ -210,13 +210,19 @@ export class ConfigService {
       ? { ...(current.gemini || {}), ...updates.gemini }
       : current.gemini;
 
+    // envPresets is a replace-all array (not deep-merged)
+    const mergedEnvPresets = updates.envPresets !== undefined
+      ? updates.envPresets
+      : current.envPresets;
+
     // Preserve machine_id and authToken regardless of updates
     const newConfig: CUIConfig = {
       ...current,
       server: mergedServer,
       interface: mergedInterface,
       gemini: mergedGemini,
-      router: mergedRouter
+      router: mergedRouter,
+      envPresets: mergedEnvPresets
     };
 
     // Update in-memory config
@@ -274,6 +280,26 @@ export class ConfigService {
     }
     if (partial.authToken !== undefined && typeof partial.authToken !== 'string') {
       throw new Error('Invalid config: authToken must be a string');
+    }
+    // envPresets validation
+    if (partial.envPresets !== undefined) {
+      if (!Array.isArray(partial.envPresets)) {
+        throw new Error('Invalid config: envPresets must be an array');
+      }
+      for (const preset of partial.envPresets) {
+        if (!preset.id || typeof preset.id !== 'string') {
+          throw new Error('Invalid config: envPreset.id must be a non-empty string');
+        }
+        if (!preset.name || typeof preset.name !== 'string') {
+          throw new Error('Invalid config: envPreset.name must be a non-empty string');
+        }
+        if (preset.proxy !== undefined && typeof preset.proxy !== 'string') {
+          throw new Error('Invalid config: envPreset.proxy must be a string');
+        }
+        if (preset.envVars !== undefined && (typeof preset.envVars !== 'object' || Array.isArray(preset.envVars))) {
+          throw new Error('Invalid config: envPreset.envVars must be a key-value object');
+        }
+      }
     }
   }
 
@@ -414,6 +440,7 @@ export class ConfigService {
         interface: { ...DEFAULT_CONFIG.interface, ...(current.interface || {}), ...(parsed.interface || {}) },
         router: parsed.router !== undefined ? (parsed.router as CUIConfig['router']) : current.router,
         gemini: parsed.gemini !== undefined ? (parsed.gemini as CUIConfig['gemini']) : current.gemini,
+        envPresets: parsed.envPresets !== undefined ? parsed.envPresets : current.envPresets,
         machine_id: parsed.machine_id || current.machine_id,
         authToken: parsed.authToken || current.authToken
       };
