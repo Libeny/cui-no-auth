@@ -117,6 +117,45 @@ Layer 2: 深度监控（ContentWatcher）
 | 详情更新 | N/A | < 1 秒 | **实时** |
 | 内存占用 | ~50MB | ~60MB | 持平 |
 
+### 🌐 环境变量/代理预设（v0.7.3 新增）
+
+每个会话可独立配置代理和环境变量，解决不同模型需要不同代理的问题：
+
+```
+[设置] ⚙️ → Environment Tab → 创建预设
+  ├─ "Clash"     → proxy: http://127.0.0.1:7897
+  ├─ "公司VPN"   → proxy: http://10.0.0.1:8080
+  └─ "第三方API" → ANTHROPIC_BASE_URL + API_KEY
+
+[新建/继续会话] 底部选择预设
+  [~/project ▾]  [Opus ▾]  [🌐 Clash ▾]  [Yolo ▾][▶]
+```
+
+- 预设存储在 `~/.cui/config.json`
+- 环境变量透传给 Claude CLI 子进程
+- 继续会话时默认 bypassPermissions 模式
+
+### 🔍 目录过滤（v0.7.3 新增）
+
+选择工作目录后，会话列表自动过滤为该目录下的会话：
+
+```
+[选择目录: ~/work/my-project]
+  ↓ 自动过滤
+[仅显示 my-project 的会话]
+```
+
+### 💾 ToolMetrics 持久化（v0.7.3 新增）
+
+代码改动统计（+N/-M）现在持久化到 SQLite，CUI 重启后不再丢失。
+
+### 🛡️ OOM 修复（v0.7.3）
+
+修复了 3 个内存泄漏，长时间运行不再 OOM：
+- Logger childLoggers 按日清理
+- ToolMetrics 7 天 TTL 自动回收
+- Resume 大消息数组及时释放
+
 ### 🎯 其他特性
 
 - **🎨 现代化界面**：响应式设计，支持桌面和移动端
@@ -125,7 +164,7 @@ Layer 2: 深度监控（ContentWatcher）
 - **🤖 多模型支持**：支持 Claude、GPT、Gemini、Ollama 等
 - **🔧 CLI 兼容**：与 Claude Code CLI 完全兼容
 - **🔔 推送通知**：任务完成后浏览器通知
-- **🎤 语音输入**：Gemini 2.5 Flash 驱动的语音识别
+- **🎤 语音输入**：支持 Gemini / GLM 语音识别
 
 ---
 
@@ -245,13 +284,17 @@ sudo apt-get install -y curl python3 build-essential
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
-# 3. 检查依赖
+# 3. 调大 inotify watcher 限制（必须！否则文件监控会静默失败）
+echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
+# 4. 检查依赖
 bash scripts/check-dependencies.sh
 
-# 4. 安装 CUI Server
+# 5. 安装 CUI Server
 npm install -g cui-no-auth
 
-# 5. 启动服务
+# 6. 启动服务
 cui-server --host 0.0.0.0 --port 8526 --skip-auth-token
 
 # 6. 配置开机自启动（可选）
@@ -288,7 +331,11 @@ sudo yum install -y python3
 curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
 sudo yum install -y nodejs
 
-# 3. 后续步骤同上
+# 3. 调大 inotify watcher 限制（必须！否则文件监控会静默失败）
+echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
+# 4. 后续步骤同上
 ```
 
 ### Docker 部署
@@ -535,22 +582,31 @@ sudo apt-get install -y python3 build-essential
 npm install
 ```
 
-### 问题 2：文件监控不工作
+### 问题 2：文件监控不工作（CentOS/Ubuntu 必读）
 
-**检查 inotify 限制**：
+> **⚠️ 重要：** Linux 上 CUI 使用 `fs.watch`（inotify 后端）监控会话文件变化。默认的 inotify watcher 限制（8192）在会话较多时会静默失败，导致新会话无法被发现、实时更新停止工作。**部署到 CentOS/Ubuntu 时必须调大此限制。**
+
+**检查当前限制**：
 ```bash
 cat /proc/sys/fs/inotify/max_user_watches
+# 如果 < 524288，需要调大
 ```
 
-**增加限制**：
+**调大限制（必须操作）**：
 ```bash
-# 临时增加
+# 临时生效
 sudo sysctl fs.inotify.max_user_watches=524288
 
-# 永久生效
+# 永久生效（重启后仍有效）
 echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
+
+**为什么需要这样做**：
+- 默认限制 8192 个 watcher，每个被监控的目录/文件占用 1 个
+- CUI 监控 `~/.claude/projects/` 下所有 JSONL 文件
+- 当会话数量超过限制时，`fs.watch` 静默失败（不报错，只是不触发事件）
+- 调到 524288 后基本不会再遇到此问题，额外内存消耗约 128MB
 
 ### 问题 3：端口被占用
 
@@ -891,9 +947,10 @@ Apache License 2.0
 
 ## 联系方式
 
-- **问题反馈**：[GitHub Issues](https://github.com/bmpixel/cui/issues)
-- **功能建议**：[GitHub Discussions](https://github.com/bmpixel/cui/discussions)
+- **问题反馈**：[GitHub Issues](https://github.com/Libeny/cui-no-auth/issues)
+- **功能建议**：[GitHub Discussions](https://github.com/Libeny/cui-no-auth/discussions)
 - **原作者**：Wenbo Pan
+- **Fork 维护者**：Limuyu（微信：BiothaLMY）
 
 ---
 
