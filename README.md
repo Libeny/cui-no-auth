@@ -950,7 +950,7 @@ Apache License 2.0
 - **问题反馈**：[GitHub Issues](https://github.com/Libeny/cui-no-auth/issues)
 - **功能建议**：[GitHub Discussions](https://github.com/Libeny/cui-no-auth/discussions)
 - **原作者**：Wenbo Pan
-- **Fork 维护者**：Limuyu（微信：BiothaLMY）
+- **Fork 维护者**：木鱼拓哉（微信：BiothaLMY）
 
 ---
 
