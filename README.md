@@ -117,44 +117,14 @@ Layer 2: 深度监控（ContentWatcher）
 | 详情更新 | N/A | < 1 秒 | **实时** |
 | 内存占用 | ~50MB | ~60MB | 持平 |
 
-### 🌐 环境变量/代理预设（v0.7.3 新增）
+### 🌐 v0.7.3 新增
 
-每个会话可独立配置代理和环境变量，解决不同模型需要不同代理的问题：
+- **环境变量/代理预设**：每个会话独立配置 proxy、API Key（⚙️ → Environment Tab）
+- **目录过滤**：选择工作目录自动过滤 session 列表
+- **ToolMetrics 持久化**：代码改动统计重启后不丢失
+- **OOM 修复**：3 个内存泄漏修复，长时间运行稳定
 
-```
-[设置] ⚙️ → Environment Tab → 创建预设
-  ├─ "Clash"     → proxy: http://127.0.0.1:7897
-  ├─ "公司VPN"   → proxy: http://10.0.0.1:8080
-  └─ "第三方API" → ANTHROPIC_BASE_URL + API_KEY
-
-[新建/继续会话] 底部选择预设
-  [~/project ▾]  [Opus ▾]  [🌐 Clash ▾]  [Yolo ▾][▶]
-```
-
-- 预设存储在 `~/.cui/config.json`
-- 环境变量透传给 Claude CLI 子进程
-- 继续会话时默认 bypassPermissions 模式
-
-### 🔍 目录过滤（v0.7.3 新增）
-
-选择工作目录后，会话列表自动过滤为该目录下的会话：
-
-```
-[选择目录: ~/work/my-project]
-  ↓ 自动过滤
-[仅显示 my-project 的会话]
-```
-
-### 💾 ToolMetrics 持久化（v0.7.3 新增）
-
-代码改动统计（+N/-M）现在持久化到 SQLite，CUI 重启后不再丢失。
-
-### 🛡️ OOM 修复（v0.7.3）
-
-修复了 3 个内存泄漏，长时间运行不再 OOM：
-- Logger childLoggers 按日清理
-- ToolMetrics 7 天 TTL 自动回收
-- Resume 大消息数组及时释放
+详见 [CHANGELOG.md](CHANGELOG.md)
 
 ### 🎯 其他特性
 
