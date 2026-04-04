@@ -38,3 +38,11 @@ body {
   flex-direction: column;
   overflow-x: hidden;
 }
+
+/* Embed mode: hide header + composer, show only messages */
+html.embed-mode .border-b {
+  display: none !important;
+}
+html.embed-mode .sticky {
+  display: none !important;
+}

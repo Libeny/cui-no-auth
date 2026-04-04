@@ -3,6 +3,11 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import InspectorApp from './inspector/InspectorApp';
 import ChatApp from './chat/ChatApp';
 import Login from './components/Login/Login';
+
+// Embed mode: hide header + composer, only show messages
+if (new URLSearchParams(window.location.search).has('embed')) {
+  document.documentElement.classList.add('embed-mode');
+}
 import { useAuth, getAuthToken, setAuthToken } from './hooks/useAuth';
 
 function App() {
