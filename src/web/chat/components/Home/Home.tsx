@@ -111,9 +111,7 @@ export function Home() {
     }
 
     lastListFeedbackTokenRef.current = listRefreshFeedback.token;
-    const container = listContainerRef.current;
-    const scrollTop = container?.scrollTop ?? 0;
-    showRefreshNotice(scrollTop > 80 ? '列表已更新，请向上查看' : '列表已更新');
+    showRefreshNotice('已更新');
   }, [listRefreshFeedback]);
 
   const handleManualRefresh = async () => {
