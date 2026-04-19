@@ -217,6 +217,14 @@ export class FileSystemService {
         });
         throw new CUIError('INVALID_PATH', 'Path contains invalid characters', 400);
       }
+
+      if (segment.startsWith('.')) {
+        this.logger.warn('Hidden path segment detected', {
+          requestedPath,
+          segment
+        });
+        throw new CUIError('INVALID_PATH', 'Path contains hidden files/directories', 400);
+      }
     }
     
     this.logger.debug('Path validated successfully', { 
@@ -290,10 +298,7 @@ export class FileSystemService {
   ): Promise<FileSystemEntry[]> {
     const entries: FileSystemEntry[] = [];
     
-    // We need to capture 'this' to use logger inside traverse
-    const self = this;
-
-    async function traverse(currentPath: string): Promise<void> {
+    const traverse = async (currentPath: string): Promise<void> => {
       let dirents;
       try {
         dirents = await fs.readdir(currentPath, { withFileTypes: true });
@@ -301,7 +306,7 @@ export class FileSystemService {
         // Log debug and skip this directory if access is denied or not found
         const errorCode = (error as NodeJS.ErrnoException).code;
         if (errorCode === 'EACCES' || errorCode === 'EPERM' || errorCode === 'ENOENT') {
-          self.logger.debug(`Skipping directory due to access error: ${currentPath}`, { error });
+          this.logger.debug(`Skipping directory due to access error: ${currentPath}`, { error });
           return;
         }
         // Re-throw other unexpected errors
@@ -335,13 +340,13 @@ export class FileSystemService {
             // Skip individual files/subdirs that can't be accessed/stated
             const errorCode = (error as NodeJS.ErrnoException).code;
             if (errorCode === 'EACCES' || errorCode === 'EPERM' || errorCode === 'ENOENT') {
-                self.logger.debug(`Skipping entry due to access error: ${fullPath}`, { error });
+                this.logger.debug(`Skipping entry due to access error: ${fullPath}`, { error });
                 continue;
             }
             throw error;
         }
       }
-    }
+    };
     
     await traverse(dirPath);
     return entries;

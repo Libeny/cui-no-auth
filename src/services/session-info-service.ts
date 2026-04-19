@@ -569,7 +569,7 @@ export class SessionInfoService {
   async getConversations(query: ConversationListQuery): Promise<{ conversations: SessionInfo[]; total: number }> {
     try {
       let sql = 'SELECT * FROM sessions WHERE 1=1';
-      const params: any[] = [];
+      const params: Array<string | number> = [];
       
       // Filtering
       if (query.projectPath) {

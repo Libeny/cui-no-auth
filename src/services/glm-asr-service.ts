@@ -17,6 +17,11 @@ export interface GLMASRTranscribeResponse {
   text: string;
 }
 
+interface GLMASRApiResponse {
+  text?: string;
+  transcription?: string;
+}
+
 export class GLMASRService {
   private logger: Logger;
   private apiKey: string | null = null;
@@ -57,22 +62,11 @@ export class GLMASRService {
       };
     }
 
-    try {
-      // Test with a minimal request (we don't have a simple health check endpoint)
-      // For now, just check if API key exists
-      return {
-        status: 'healthy',
-        message: 'GLM ASR API key is configured',
-        apiKeyValid: true
-      };
-    } catch (error) {
-      this.logger.error('Health check failed', { error });
-      return {
-        status: 'unhealthy',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        apiKeyValid: false
-      };
-    }
+    return {
+      status: 'healthy',
+      message: 'GLM ASR API key is configured',
+      apiKeyValid: true
+    };
   }
 
   async transcribe(audio: string, mimeType: string): Promise<GLMASRTranscribeResponse> {
@@ -119,7 +113,7 @@ export class GLMASRService {
         );
       }
 
-      const result = await response.json() as any;
+      const result = await response.json() as GLMASRApiResponse;
 
       // Extract text from response
       // Based on GLM ASR API documentation, the response should contain the transcribed text

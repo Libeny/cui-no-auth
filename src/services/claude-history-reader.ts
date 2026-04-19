@@ -8,9 +8,9 @@ import {
   ConversationMessage,
   ConversationListQuery,
   CUIError,
-  ToolMetrics,
   SubagentSummary,
   SubagentDetailsResponse,
+  SessionInfo,
 } from '@/types/index.js';
 import { createLogger, type Logger } from './logger.js';
 import { SessionInfoService } from './session-info-service.js';
@@ -34,6 +34,8 @@ type RawJsonEntry = {
   summary?: string;
   leafUuid?: string;
 };
+
+type IndexedSessionInfo = SessionInfo & { sessionId: string };
 
 /**
  * Reads conversation history from Claude's local storage
@@ -75,35 +77,40 @@ export class ClaudeHistoryReader {
     total: number;
   }> {
     try {
-      // Use SessionInfoService to query indexed data directly
-      const { conversations: sessionInfos, total } = await this.sessionInfoService.getConversations(filter || {});
-      
-      // Map to ConversationSummary
-      const conversations: ConversationSummary[] = sessionInfos.map((info: any) => {
-        // info contains indexed fields (summary, project_path, etc.) and sessionId
-        
-        return {
-          sessionId: info.sessionId,
-          projectPath: info.project_path || '',
-          summary: info.summary || 'No summary available',
-          sessionInfo: info, // The info object itself is the session info
-          createdAt: info.created_at,
-          updatedAt: info.updated_at,
-          messageCount: info.message_count || 0,
-          totalDuration: info.total_duration || 0,
-          model: info.model || 'Unknown',
-          status: 'completed' as const,
-          // toolMetrics is expensive to calculate, omit for list view or add to index later
-          toolMetrics: undefined 
-        };
-      });
+      if (typeof this.sessionInfoService.getConversations === 'function') {
+        const { conversations: sessionInfos, total } = await this.sessionInfoService.getConversations(filter || {});
 
-      return {
-        conversations,
-        total
-      };
+        const conversations: ConversationSummary[] = sessionInfos.map((info) => {
+          const sessionInfo = info as IndexedSessionInfo;
+
+          return {
+            sessionId: sessionInfo.sessionId,
+            projectPath: sessionInfo.project_path || '',
+            summary: sessionInfo.summary || 'No summary available',
+            sessionInfo,
+            createdAt: sessionInfo.created_at,
+            updatedAt: sessionInfo.updated_at,
+            messageCount: sessionInfo.message_count || 0,
+            totalDuration: sessionInfo.total_duration || 0,
+            model: sessionInfo.model || 'Unknown',
+            status: 'completed' as const,
+            toolMetrics: undefined,
+          };
+        });
+
+        return {
+          conversations,
+          total
+        };
+      }
+
+      return await this.listConversationsFromFilesystem(filter);
     } catch (error) {
-      throw new CUIError('HISTORY_READ_FAILED', `Failed to read conversation history: ${error}`, 500);
+      try {
+        return await this.listConversationsFromFilesystem(filter);
+      } catch {
+        throw new CUIError('HISTORY_READ_FAILED', `Failed to read conversation history: ${error}`, 500);
+      }
     }
   }
 
@@ -112,24 +119,11 @@ export class ClaudeHistoryReader {
    */
   async fetchConversation(sessionId: string): Promise<ConversationMessage[]> {
     try {
-      // 1. Locate the file
-      const projectPath = await this.findProjectPathForSession(sessionId);
-      if (!projectPath) {
-        throw new CUIError('CONVERSATION_NOT_FOUND', `Conversation ${sessionId} not found in index`, 404);
-      }
-
-      // Convert project path to directory name (Claude's convention: replace / with -)
-      // Note: projectPath stored in DB is real path (e.g., /Users/x/y). 
-      // We need to scan the projects dir to find the matching folder name if we don't assume the mapping is just replace / with -
-      // But usually Claude folder name IS encoded path.
-      // However, finding the file is tricky if we don't know the exact folder name.
-      // Let's try to find the file in filesystem.
-      
       const projectsDir = path.join(this.claudeHomePath, 'projects');
       const filePath = await this.locateSessionFile(projectsDir, sessionId);
       
       if (!filePath) {
-        throw new CUIError('FILE_NOT_FOUND', `Conversation file for ${sessionId} not found`, 404);
+        throw new CUIError('CONVERSATION_NOT_FOUND', `Conversation ${sessionId} not found`, 404);
       }
 
       // 2. Parse file
@@ -250,7 +244,16 @@ export class ClaudeHistoryReader {
   } | null> {
     try {
       const info = await this.sessionInfoService.getSessionInfo(sessionId);
-      if (!info.created_at) return null; // Not found or default
+      const hasIndexedMetadata =
+        Boolean(info.summary) ||
+        Boolean(info.project_path) ||
+        Boolean(info.model) ||
+        Boolean(info.total_duration);
+
+      if (!hasIndexedMetadata) {
+        const fallback = await this.getConversationMetadataFromFile(sessionId);
+        return fallback;
+      }
 
       return {
         summary: info.summary || 'No summary',
@@ -271,7 +274,7 @@ export class ClaudeHistoryReader {
     try {
       const info = await this.sessionInfoService.getSessionInfo(sessionId);
       return info.project_path || null;
-    } catch (error) {
+    } catch {
       return null;
     }
   }
@@ -336,8 +339,7 @@ export class ClaudeHistoryReader {
   private async locateSessionFile(projectsDir: string, sessionId: string): Promise<string | null> {
     // Optimization: Check index first (O(1) lookup)
     try {
-      // Use 'any' cast if TypeScript complains about missing property before rebuild propagates types
-      const info = await this.sessionInfoService.getSessionInfo(sessionId) as any;
+      const info = await this.sessionInfoService.getSessionInfo(sessionId);
       if (info.file_path) {
         try {
           await fs.access(info.file_path);
@@ -350,29 +352,27 @@ export class ClaudeHistoryReader {
       this.logger.debug('Failed to query session info for file path', { sessionId, error });
     }
 
-    // Optimization: Try to guess the directory name from project path if available
-    // But simplest reliable way is to look for {sessionId}.jsonl recursively or rely on finding it efficiently.
-    // Since we don't store the *exact* file path in DB (only project path), we might need to search.
-    
-    // If we have project_path in DB, we can guess the folder name.
-    const info = await this.sessionInfoService.getSessionInfo(sessionId);
-    if (info.project_path) {
-        // Try exact match first logic if possible, but Claude's encoding might vary.
-        // Let's do a quick scan of projects dir because it's usually not too huge (directories count).
-    }
-
     try {
       const dirs = await fs.readdir(projectsDir);
       for (const dir of dirs) {
-        const potentialPath = path.join(projectsDir, dir, `${sessionId}.jsonl`);
         try {
-            await fs.access(potentialPath);
-            return potentialPath;
+          const candidateDir = path.join(projectsDir, dir);
+          const stat = await fs.stat(candidateDir);
+          if (!stat.isDirectory()) continue;
+          const files = await fs.readdir(candidateDir);
+          for (const file of files) {
+            if (!file.endsWith('.jsonl') || file.startsWith('agent-')) continue;
+            const potentialPath = path.join(candidateDir, file);
+            const entries = await this.parseJsonlFile(potentialPath);
+            if (entries.some((entry) => entry.sessionId === sessionId)) {
+              return potentialPath;
+            }
+          }
         } catch {
-            // continue
+          // continue
         }
       }
-    } catch (e) {
+    } catch {
       return null;
     }
     return null;
@@ -396,7 +396,7 @@ export class ClaudeHistoryReader {
         if (!line.trim()) continue;
         try {
           entries.push(JSON.parse(line));
-        } catch (e) {
+        } catch {
           // ignore
         }
       }
@@ -439,7 +439,11 @@ export class ClaudeHistoryReader {
    */
   private buildConversationChain(sessionId: string, entries: RawJsonEntry[]): ConversationMessage[] | null {
     const messages: ConversationMessage[] = entries
-      .filter(e => e.type === 'user' || e.type === 'assistant') // We primarily care about chat messages for the view
+      .filter(
+        (entry) =>
+          (entry.type === 'user' || entry.type === 'assistant') &&
+          (entry.sessionId === sessionId || !entry.sessionId)
+      )
       .map(entry => ({
         uuid: entry.uuid || '',
         type: entry.type as 'user' | 'assistant' | 'system',
@@ -492,5 +496,178 @@ export class ClaudeHistoryReader {
     orphans.sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     
     return [...chain, ...orphans];
+  }
+
+  private decodeProjectPath(encodedPath: string): string {
+    if (!encodedPath.startsWith('-')) {
+      return encodedPath;
+    }
+
+    return encodedPath.replace(/^-/, '/').replace(/-/g, '/');
+  }
+
+  private applyFilters<T extends {
+    projectPath?: string;
+    createdAt?: string;
+    updatedAt?: string;
+    sessionInfo?: SessionInfo;
+  }>(conversations: T[], filter?: ConversationListQuery): T[] {
+    if (!filter) {
+      return conversations;
+    }
+
+    let filtered = conversations;
+
+    if (filter.projectPath) {
+      filtered = filtered.filter((conversation) => conversation.projectPath === filter.projectPath);
+    }
+
+    if (filter.archived !== undefined) {
+      filtered = filtered.filter((conversation) => Boolean(conversation.sessionInfo?.archived) === filter.archived);
+    }
+
+    if (filter.pinned !== undefined) {
+      filtered = filtered.filter((conversation) => Boolean(conversation.sessionInfo?.pinned) === filter.pinned);
+    }
+
+    if (filter.hasContinuation !== undefined) {
+      filtered = filtered.filter((conversation) => {
+        const hasContinuation = Boolean(conversation.sessionInfo?.continuation_session_id);
+        return hasContinuation === filter.hasContinuation;
+      });
+    }
+
+    const sortBy = filter.sortBy === 'updated' ? 'updatedAt' : 'createdAt';
+    const order = filter.order === 'asc' ? 1 : -1;
+
+    return [...filtered].sort((a, b) => {
+      const aTime = new Date(a[sortBy] || 0).getTime();
+      const bTime = new Date(b[sortBy] || 0).getTime();
+      return (aTime - bTime) * order;
+    });
+  }
+
+  private applyPagination<T>(conversations: T[], filter?: ConversationListQuery): T[] {
+    if (!filter) {
+      return conversations;
+    }
+
+    const limit = filter.limit ?? 20;
+    const offset = filter.offset ?? 0;
+    return conversations.slice(offset, offset + limit);
+  }
+
+  private async listConversationsFromFilesystem(filter?: ConversationListQuery): Promise<{
+    conversations: ConversationSummary[];
+    total: number;
+  }> {
+    const projectsDir = path.join(this.claudeHomePath, 'projects');
+
+    try {
+      const projectEntries = await fs.readdir(projectsDir, { withFileTypes: true });
+      const conversations: ConversationSummary[] = [];
+
+      for (const projectEntry of projectEntries) {
+        if (!projectEntry.isDirectory()) continue;
+
+        const projectDir = path.join(projectsDir, projectEntry.name);
+        const files = await fs.readdir(projectDir);
+
+        for (const file of files) {
+          if (!file.endsWith('.jsonl') || file.startsWith('agent-')) continue;
+
+          const filePath = path.join(projectDir, file);
+          const scanned = await this.scanConversationFile(filePath, projectEntry.name);
+          conversations.push(...scanned);
+        }
+      }
+
+      const filtered = this.applyFilters(conversations, filter);
+      return {
+        conversations: this.applyPagination(filtered, filter),
+        total: filtered.length,
+      };
+    } catch {
+      return {
+        conversations: [],
+        total: 0,
+      };
+    }
+  }
+
+  private async scanConversationFile(filePath: string, projectDirName: string): Promise<ConversationSummary[]> {
+    const entries = await this.parseJsonlFile(filePath);
+    const summaryBySession = new Map<string, string>();
+    let pendingSummary = '';
+
+    for (const entry of entries) {
+      if (entry.type === 'summary' && typeof entry.summary === 'string') {
+        pendingSummary = entry.summary;
+        continue;
+      }
+
+      if (!entry.sessionId) continue;
+      if (pendingSummary && !summaryBySession.has(entry.sessionId)) {
+        summaryBySession.set(entry.sessionId, pendingSummary);
+        pendingSummary = '';
+      }
+    }
+
+    const sessionIds = [...new Set(entries.map((entry) => entry.sessionId).filter((value): value is string => Boolean(value)))];
+    const conversations: ConversationSummary[] = [];
+
+    for (const sessionId of sessionIds) {
+      const messages = this.buildConversationChain(sessionId, entries) || [];
+      if (messages.length === 0) continue;
+
+      const sessionInfo = await this.sessionInfoService.getSessionInfo(sessionId);
+      const assistantMessages = messages.filter((message) => message.type === 'assistant');
+      const totalDuration = messages.reduce((sum, message) => sum + (message.durationMs || 0), 0);
+      const projectPath = messages.find((message) => message.cwd)?.cwd || this.decodeProjectPath(projectDirName);
+
+      conversations.push({
+        sessionId,
+        projectPath,
+        summary: summaryBySession.get(sessionId) || this.extractFirstText(messages[0]?.message) || 'No summary available',
+        sessionInfo,
+        createdAt: messages[0]?.timestamp || sessionInfo.created_at,
+        updatedAt: messages[messages.length - 1]?.timestamp || sessionInfo.updated_at,
+        messageCount: messages.length,
+        totalDuration,
+        model:
+          assistantMessages.find((message) => message.model)?.model ||
+          assistantMessages[0]?.model ||
+          'Unknown',
+        status: 'completed',
+        toolMetrics: undefined,
+      });
+    }
+
+    return conversations;
+  }
+
+  private async getConversationMetadataFromFile(sessionId: string): Promise<{
+    summary: string;
+    projectPath: string;
+    model: string;
+    totalDuration: number;
+  } | null> {
+    const filePath = await this.locateMainSessionFile(sessionId);
+    if (!filePath) {
+      return null;
+    }
+
+    const conversations = await this.scanConversationFile(filePath, path.basename(path.dirname(filePath)));
+    const conversation = conversations.find((item) => item.sessionId === sessionId);
+    if (!conversation) {
+      return null;
+    }
+
+    return {
+      summary: conversation.summary,
+      projectPath: conversation.projectPath,
+      model: conversation.model,
+      totalDuration: conversation.totalDuration,
+    };
   }
 }

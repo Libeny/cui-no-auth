@@ -28,6 +28,33 @@ interface IndexedMetadata {
   writeCount?: number;
 }
 
+type TextContentBlock = {
+  type: 'text';
+  text: string;
+};
+
+type ToolUseContentBlock = {
+  type: 'tool_use';
+  name: string;
+  input?: Record<string, unknown>;
+};
+
+type MessageContentBlock = TextContentBlock | ToolUseContentBlock | { type: string };
+
+type HistoryEntryMessage = {
+  model?: string;
+  content?: string | MessageContentBlock[];
+};
+
+type HistoryEntry = {
+  type?: string;
+  timestamp?: string;
+  cwd?: string;
+  isSidechain?: boolean;
+  durationMs?: number;
+  message?: string | HistoryEntryMessage;
+};
+
 export class HistoryIndexer {
   private static readonly POLL_INTERVAL_MS = 15000;
   private logger: Logger;
@@ -248,7 +275,7 @@ export class HistoryIndexer {
           if (!line.trim()) return;
           
           // Fast JSON parse - we only need top level keys usually
-          const entry = JSON.parse(line);
+          const entry = JSON.parse(line) as HistoryEntry;
           
           // Ignore sidechain messages (internal sub-agents)
           if (entry.isSidechain) {
@@ -275,7 +302,12 @@ export class HistoryIndexer {
             }
             
             // Extract model from first message that has it
-            if (!foundModel && entry.message && entry.message.model) {
+            if (
+              !foundModel &&
+              entry.message &&
+              typeof entry.message === 'object' &&
+              entry.message.model
+            ) {
               model = entry.message.model;
               foundModel = true;
             }
@@ -290,8 +322,8 @@ export class HistoryIndexer {
                  } else if (Array.isArray(entry.message.content)) {
                    // Extract text from content blocks
                    firstUserMessage = entry.message.content
-                     .filter((b: any) => b.type === 'text')
-                     .map((b: any) => b.text)
+                     .filter((block): block is TextContentBlock => block.type === 'text')
+                     .map((block) => block.text)
                      .join(' ');
                  }
               }
@@ -299,12 +331,14 @@ export class HistoryIndexer {
 
             // Extract tool metrics from assistant messages
             if (entry.type === 'assistant' && entry.message && typeof entry.message === 'object') {
-              const msg = entry.message as any;
+              const msg = entry.message;
               if (Array.isArray(msg.content)) {
                 for (const block of msg.content) {
                   if (block.type !== 'tool_use') continue;
+                  if (!('name' in block)) continue;
                   const toolName = block.name;
-                  const input = block.input as Record<string, any> | undefined;
+                  if (!('input' in block)) continue;
+                  const input = block.input;
                   if (!input) continue;
 
                   if (toolName === 'Edit') {
@@ -345,7 +379,7 @@ export class HistoryIndexer {
             }
           }
           
-        } catch (e) {
+        } catch {
           // Ignore parse errors
         }
       });
