@@ -6,6 +6,7 @@ import { useConversations } from '../../contexts/ConversationsContext';
 import { api } from '../../services/api';
 
 interface TaskListProps {
+  scrollRef?: React.RefObject<HTMLDivElement | null>;
   conversations: ConversationSummary[];
   loading: boolean;
   loadingMore: boolean;
@@ -20,6 +21,7 @@ interface TaskListProps {
 }
 
 export function TaskList({ 
+  scrollRef: externalScrollRef,
   conversations, 
   loading, 
   loadingMore, 
@@ -29,7 +31,8 @@ export function TaskList({
   onLoadMore 
 }: TaskListProps) {
   const navigate = useNavigate();
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const internalScrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = externalScrollRef ?? internalScrollRef;
   const loadingRef = useRef<HTMLDivElement>(null);
   const { recentDirectories, loadConversations } = useConversations();
   const [renamingSessionId, setRenamingSessionId] = React.useState<string | null>(null);

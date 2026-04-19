@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Settings } from 'lucide-react';
+import { RefreshCw, Settings } from 'lucide-react';
 import { useTheme } from '../../hooks/useTheme';
 import { PreferencesModal } from '../PreferencesModal/PreferencesModal';
 import { Button } from '@/web/chat/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/web/chat/components/ui/tooltip';
 
-export function Header() {
+interface HeaderProps {
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
+}
+
+export function Header({ onRefresh, isRefreshing = false }: HeaderProps) {
   const theme = useTheme();
   const [showPrefs, setShowPrefs] = useState(false);
   
@@ -31,6 +36,27 @@ export function Header() {
         <div className="relative flex items-center justify-between w-full px-1 py-3">
           {/* Navigation */}
           <nav className="flex items-center gap-2 ml-auto">
+            {onRefresh && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="relative w-[30px] h-[30px] rounded-full hover:bg-muted/50"
+                      aria-label="Refresh task list"
+                      onClick={onRefresh}
+                      disabled={isRefreshing}
+                    >
+                      <RefreshCw size={16} className={`text-muted-foreground ${isRefreshing ? 'animate-spin' : ''}`} />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Refresh</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
             {/* Settings Button */}
             <TooltipProvider>
               <Tooltip>

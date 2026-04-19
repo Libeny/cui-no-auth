@@ -21,7 +21,7 @@ interface ConversationsContextType {
     archived?: boolean;
     pinned?: boolean;
     projectPath?: string;
-  }, showLoading?: boolean) => Promise<void>;
+  }, showLoading?: boolean) => Promise<'updated' | 'noop'>;
   loadMoreConversations: (filters?: {
     hasContinuation?: boolean;
     archived?: boolean;
@@ -29,6 +29,11 @@ interface ConversationsContextType {
     projectPath?: string;
   }) => Promise<void>;
   getMostRecentWorkingDirectory: () => string | null;
+  listRefreshFeedback: {
+    outcome: 'updated';
+    source: 'auto';
+    token: number;
+  } | null;
 }
 
 const ConversationsContext = createContext<ConversationsContextType | undefined>(undefined);
@@ -44,6 +49,11 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [recentDirectories, setRecentDirectories] = useState<Record<string, RecentDirectory>>({});
+  const [listRefreshFeedback, setListRefreshFeedback] = useState<{
+    outcome: 'updated';
+    source: 'auto';
+    token: number;
+  } | null>(null);
   const { subscribeToStreams, getStreamStatus, streamStatuses } = useStreamStatus();
   
   // Track current state for event handlers
@@ -107,12 +117,17 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     setRecentDirectories(newDirectories);
   };
 
+  const buildListFingerprint = (items: ConversationSummaryWithLiveStatus[]) =>
+    items
+      .map((item) => `${item.sessionId}:${item.updatedAt}:${item.summary}:${item.status}`)
+      .join('|');
+
   const loadConversations = async (limit?: number, filters?: {
     hasContinuation?: boolean;
     archived?: boolean;
     pinned?: boolean;
     projectPath?: string;
-  }, showLoading: boolean = true) => {
+  }, showLoading: boolean = true): Promise<'updated' | 'noop'> => {
     // When filters are explicitly provided, persist them as active filters.
     // When filters are undefined (e.g. from TaskList archive/pin/rename),
     // reuse the last active filters to preserve projectPath filtering.
@@ -128,6 +143,7 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
 
     try {
       const loadLimit = limit || INITIAL_LIMIT;
+      const previousFingerprint = buildListFingerprint(conversationsRef.current);
       // Load working directories from API in parallel with conversations
       const [data, apiDirectories] = await Promise.all([
         api.getConversations({ 
@@ -143,6 +159,7 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
       setConversations(data.conversations);
       updateRecentDirectories(data.conversations, apiDirectories);
       setHasMore(data.conversations.length === loadLimit);
+      const nextFingerprint = buildListFingerprint(data.conversations);
       
       // Subscribe to streams for ongoing conversations
       const ongoingStreamIds = data.conversations
@@ -152,9 +169,11 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
       if (ongoingStreamIds.length > 0) {
         subscribeToStreams(ongoingStreamIds);
       }
+      return nextFingerprint !== previousFingerprint ? 'updated' : 'noop';
     } catch (err) {
       if (showLoading) setError('Failed to load conversations');
       console.error('Error loading conversations:', err);
+      return 'noop';
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -352,6 +371,12 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
         };
       });
     }
+
+    setListRefreshFeedback({
+      outcome: 'updated',
+      source: 'auto',
+      token: Date.now(),
+    });
   };
 
   // Effect to merge live status with conversations - REMOVED for performance optimization
@@ -412,7 +437,8 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
         recentDirectories,
         loadConversations, 
         loadMoreConversations, 
-        getMostRecentWorkingDirectory 
+        getMostRecentWorkingDirectory,
+        listRefreshFeedback,
       }}
     >
       {children}
