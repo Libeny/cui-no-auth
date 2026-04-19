@@ -35,6 +35,7 @@ const ConversationsContext = createContext<ConversationsContextType | undefined>
 
 const INITIAL_LIMIT = 20;
 const LOAD_MORE_LIMIT = 40;
+const INDEX_UPDATE_THROTTLE_MS = 15000;
 
 export function ConversationsProvider({ children }: { children: ReactNode }) {
   const [conversations, setConversations] = useState<ConversationSummaryWithLiveStatus[]>([]);
@@ -56,6 +57,8 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     pinned?: boolean;
     projectPath?: string;
   }>({});
+  const lastIndexRefreshAtRef = useRef(0);
+  const pendingIndexRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadWorkingDirectories = async (): Promise<Record<string, RecentDirectory> | null> => {
     try {
@@ -220,6 +223,137 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     return sorted[0]?.projectPath || null;
   };
 
+  const scheduleThrottledIndexRefresh = () => {
+    const now = Date.now();
+    const elapsed = now - lastIndexRefreshAtRef.current;
+    const runRefresh = () => {
+      lastIndexRefreshAtRef.current = Date.now();
+      pendingIndexRefreshRef.current = null;
+      const currentCount = conversationsRef.current.length || INITIAL_LIMIT;
+      loadConversations(currentCount, activeFiltersRef.current, false);
+    };
+
+    if (elapsed >= INDEX_UPDATE_THROTTLE_MS && !pendingIndexRefreshRef.current) {
+      runRefresh();
+      return;
+    }
+
+    if (pendingIndexRefreshRef.current) {
+      return;
+    }
+
+    const delay = Math.max(0, INDEX_UPDATE_THROTTLE_MS - elapsed);
+    pendingIndexRefreshRef.current = setTimeout(runRefresh, delay);
+  };
+
+  const applySessionListUpdate = (sessionId: string, eventType: 'created' | 'modified', metadata: any) => {
+    setConversations(prev => {
+      const existingIndex = prev.findIndex(c => c.sessionId === sessionId);
+
+      if (eventType === 'created') {
+        if (existingIndex === -1) {
+          const newSession = {
+            ...metadata,
+            sessionInfo: metadata.sessionInfo || {
+              custom_name: '',
+              created_at: metadata.createdAt || new Date().toISOString(),
+              updated_at: metadata.updatedAt || new Date().toISOString(),
+              version: 3,
+              pinned: false,
+              archived: false,
+              continuation_session_id: '',
+              initial_commit_head: '',
+              permission_mode: 'default',
+              summary: metadata.summary,
+              project_path: metadata.projectPath,
+              message_count: metadata.messageCount,
+              model: metadata.model,
+              sessionId: metadata.sessionId,
+            },
+          };
+          return [newSession, ...prev];
+        }
+        return prev;
+      }
+
+      if (existingIndex >= 0) {
+        const oldUpdatedAt = new Date(prev[existingIndex].updatedAt).getTime();
+        const newUpdatedAt = new Date(metadata.updatedAt).getTime();
+
+        if (newUpdatedAt > oldUpdatedAt) {
+          const updatedSession = {
+            ...prev[existingIndex],
+            ...metadata,
+            sessionInfo: {
+              ...prev[existingIndex].sessionInfo,
+              ...(metadata.sessionInfo || {}),
+              updated_at: metadata.updatedAt,
+              message_count: metadata.messageCount,
+              summary: metadata.summary || prev[existingIndex].sessionInfo.summary,
+              project_path: metadata.projectPath || prev[existingIndex].sessionInfo.project_path,
+              model: metadata.model || prev[existingIndex].sessionInfo.model,
+            },
+          };
+          const newList = prev.filter((_, i) => i !== existingIndex);
+          return [updatedSession, ...newList];
+        }
+
+        const updated = [...prev];
+        updated[existingIndex] = {
+          ...updated[existingIndex],
+          ...metadata,
+          sessionInfo: {
+            ...updated[existingIndex].sessionInfo,
+            ...(metadata.sessionInfo || {}),
+            message_count: metadata.messageCount,
+            summary: metadata.summary || updated[existingIndex].sessionInfo.summary,
+          },
+        };
+        return updated;
+      }
+
+      if (prev.length > 0 && new Date(metadata.updatedAt) > new Date(prev[0].updatedAt)) {
+        const newSession = {
+          ...metadata,
+          sessionInfo: metadata.sessionInfo || {
+            custom_name: '',
+            created_at: metadata.createdAt || new Date().toISOString(),
+            updated_at: metadata.updatedAt || new Date().toISOString(),
+            version: 3,
+            pinned: false,
+            archived: false,
+            continuation_session_id: '',
+            initial_commit_head: '',
+            permission_mode: 'default',
+            summary: metadata.summary,
+            project_path: metadata.projectPath,
+            message_count: metadata.messageCount,
+            model: metadata.model,
+            sessionId: metadata.sessionId,
+          },
+        };
+        return [newSession, ...prev];
+      }
+
+      return prev;
+    });
+
+    if (metadata.projectPath) {
+      setRecentDirectories(prev => {
+        const pathParts = metadata.projectPath.split('/');
+        const shortname = pathParts[pathParts.length - 1] || metadata.projectPath;
+
+        return {
+          ...prev,
+          [metadata.projectPath]: {
+            lastDate: metadata.updatedAt,
+            shortname: prev[metadata.projectPath]?.shortname || shortname,
+          },
+        };
+      });
+    }
+  };
+
   // Effect to merge live status with conversations - REMOVED for performance optimization
   // The TaskItem component now handles live status subscription individually
   // via the LiveTaskStatus component.
@@ -251,145 +385,21 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     onMessage: (event) => {
       console.log('[ConversationsContext] onMessage called, event type:', event.type);
       if (event.type === 'index_update') {
-        // Refresh the list silently when any session is updated
-        // Reuse active filters (including projectPath) to preserve directory filtering
-        const currentCount = conversationsRef.current.length || INITIAL_LIMIT;
-        loadConversations(currentCount, activeFiltersRef.current, false);
+        scheduleThrottledIndexRefresh();
       } else if (event.type === 'session_list_update') {
-        // Handle real-time session list updates
         const { sessionId, eventType, metadata } = event.data;
-
-        setConversations(prev => {
-          const existingIndex = prev.findIndex(c => c.sessionId === sessionId);
-
-          if (eventType === 'created') {
-            // New session created
-            if (existingIndex === -1) {
-              // Insert at the top
-              console.log('[ConversationsContext] New session detected:', sessionId);
-
-              // Ensure metadata has sessionInfo structure
-              const newSession = {
-                ...metadata,
-                sessionInfo: metadata.sessionInfo || {
-                  custom_name: '',
-                  created_at: metadata.createdAt || new Date().toISOString(),
-                  updated_at: metadata.updatedAt || new Date().toISOString(),
-                  version: 3,
-                  pinned: false,
-                  archived: false,
-                  continuation_session_id: '',
-                  initial_commit_head: '',
-                  permission_mode: 'default',
-                  summary: metadata.summary,
-                  project_path: metadata.projectPath,
-                  message_count: metadata.messageCount,
-                  model: metadata.model,
-                  sessionId: metadata.sessionId
-                }
-              };
-
-              return [newSession, ...prev];
-            } else {
-              // Already exists (shouldn't happen, but handle gracefully)
-              return prev;
-            }
-          } else if (eventType === 'modified') {
-            // Session metadata updated
-            if (existingIndex >= 0) {
-              // Check if updatedAt changed (new activity)
-              const oldUpdatedAt = new Date(prev[existingIndex].updatedAt).getTime();
-              const newUpdatedAt = new Date(metadata.updatedAt).getTime();
-
-              if (newUpdatedAt > oldUpdatedAt) {
-                // Session has new activity, move to top
-                console.log('[ConversationsContext] Session updated, moving to top:', sessionId);
-                const updatedSession = {
-                  ...prev[existingIndex],
-                  ...metadata,
-                  // Preserve existing sessionInfo, update with new metadata
-                  sessionInfo: {
-                    ...prev[existingIndex].sessionInfo,
-                    updated_at: metadata.updatedAt,
-                    message_count: metadata.messageCount,
-                    summary: metadata.summary || prev[existingIndex].sessionInfo.summary,
-                    project_path: metadata.projectPath || prev[existingIndex].sessionInfo.project_path,
-                    model: metadata.model || prev[existingIndex].sessionInfo.model
-                  }
-                };
-                // Remove from old position and add to top
-                const newList = prev.filter((_, i) => i !== existingIndex);
-                return [updatedSession, ...newList];
-              } else {
-                // Only metadata changed, keep position
-                console.log('[ConversationsContext] Metadata updated:', sessionId);
-                const updated = [...prev];
-                updated[existingIndex] = {
-                  ...updated[existingIndex],
-                  ...metadata,
-                  sessionInfo: {
-                    ...updated[existingIndex].sessionInfo,
-                    message_count: metadata.messageCount,
-                    summary: metadata.summary || updated[existingIndex].sessionInfo.summary
-                  }
-                };
-                return updated;
-              }
-            } else {
-              // Not loaded yet, check if it's newer than the first item
-              if (prev.length > 0 && new Date(metadata.updatedAt) > new Date(prev[0].updatedAt)) {
-                // This updated session is now the most recent, add it to top
-                console.log('[ConversationsContext] Updated session now most recent:', sessionId);
-
-                // Ensure complete sessionInfo structure
-                const newSession = {
-                  ...metadata,
-                  sessionInfo: metadata.sessionInfo || {
-                    custom_name: '',
-                    created_at: metadata.createdAt || new Date().toISOString(),
-                    updated_at: metadata.updatedAt || new Date().toISOString(),
-                    version: 3,
-                    pinned: false,
-                    archived: false,
-                    continuation_session_id: '',
-                    initial_commit_head: '',
-                    permission_mode: 'default',
-                    summary: metadata.summary,
-                    project_path: metadata.projectPath,
-                    message_count: metadata.messageCount,
-                    model: metadata.model,
-                    sessionId: metadata.sessionId
-                  }
-                };
-
-                return [newSession, ...prev];
-              }
-              // Otherwise, ignore (not in loaded range)
-              return prev;
-            }
-          }
-
-          return prev;
-        });
-
-        // Update recent directories if projectPath changed
-        if (metadata.projectPath) {
-          setRecentDirectories(prev => {
-            const pathParts = metadata.projectPath.split('/');
-            const shortname = pathParts[pathParts.length - 1] || metadata.projectPath;
-
-            return {
-              ...prev,
-              [metadata.projectPath]: {
-                lastDate: metadata.updatedAt,
-                shortname: prev[metadata.projectPath]?.shortname || shortname
-              }
-            };
-          });
-        }
+        applySessionListUpdate(sessionId, eventType, metadata);
       }
     }
   });
+
+  useEffect(() => {
+    return () => {
+      if (pendingIndexRefreshRef.current) {
+        clearTimeout(pendingIndexRefreshRef.current);
+      }
+    };
+  }, []);
 
   return (
     <ConversationsContext.Provider 

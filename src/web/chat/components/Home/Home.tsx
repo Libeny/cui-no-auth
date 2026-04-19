@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useConversations } from '../../contexts/ConversationsContext';
 import { api } from '../../services/api';
 import { Header } from './Header';
-import { Composer, ComposerRef } from '@/web/chat/components/Composer';
+import { ALL_DIRECTORIES_VALUE, Composer, ComposerRef } from '@/web/chat/components/Composer';
 import { TaskTabs } from './TaskTabs';
 import { TaskList } from './TaskList';
 import type { EnvPreset } from '../../types';
@@ -23,7 +23,7 @@ export function Home() {
   } = useConversations();
   const [activeTab, setActiveTab] = useState<'tasks' | 'history' | 'archive'>('tasks');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [selectedDirectory, setSelectedDirectory] = useState<string | undefined>(undefined);
+  const [selectedDirectory, setSelectedDirectory] = useState<string | undefined>(ALL_DIRECTORIES_VALUE);
   const [envPresets, setEnvPresets] = useState<EnvPreset[]>([]);
   const [selectedEnvPresetId, setSelectedEnvPresetId] = useState<string | undefined>(undefined);
   const conversationCountRef = useRef(conversations.length);
@@ -53,7 +53,7 @@ export function Home() {
           return {};
       }
     })();
-    return projectPath ? { ...base, projectPath } : base;
+    return projectPath && projectPath !== ALL_DIRECTORIES_VALUE ? { ...base, projectPath } : base;
   };
 
   // Auto-refresh on navigation back to Home
@@ -109,11 +109,6 @@ export function Home() {
   }, [loadConversations, activeTab]);
   */
 
-  // Get the most recent working directory from conversations
-  const recentWorkingDirectory = conversations.length > 0 
-    ? conversations[0].projectPath 
-    : undefined;
-
   const handleComposerSubmit = async (text: string, workingDirectory?: string, model?: string, permissionMode?: string, envPresetId?: string) => {
     setIsSubmitting(true);
 
@@ -164,17 +159,17 @@ export function Home() {
               <div className="w-full">
                 <Composer 
                   ref={composerRef}
-                  workingDirectory={recentWorkingDirectory}
+                  workingDirectory={selectedDirectory}
                   onSubmit={handleComposerSubmit}
                   isLoading={isSubmitting}
                   placeholder="Describe your task"
                   showDirectorySelector={true}
+                  allowAllDirectoriesOption={true}
                   showModelSelector={true}
                   enableFileAutocomplete={true}
                   recentDirectories={recentDirectories}
                   getMostRecentWorkingDirectory={getMostRecentWorkingDirectory}
                   onDirectoryChange={(directory) => {
-                    // Filter session list by selected directory
                     console.log('[Home] Directory changed:', directory);
                     setSelectedDirectory(directory);
                     // Focus input after directory change
@@ -219,7 +214,11 @@ export function Home() {
               hasMore={hasMore}
               error={error}
               activeTab={activeTab}
-              onLoadMore={(filters) => loadMoreConversations(selectedDirectory ? { ...filters, projectPath: selectedDirectory } : filters)}
+              onLoadMore={(filters) => loadMoreConversations(
+                selectedDirectory && selectedDirectory !== ALL_DIRECTORIES_VALUE
+                  ? { ...filters, projectPath: selectedDirectory }
+                  : filters
+              )}
             />
           </div>
         </div>

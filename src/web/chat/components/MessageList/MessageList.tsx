@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { RefreshCw } from 'lucide-react';
 import { MessageItem } from './MessageItem';
 import type { ChatMessage, ToolResult, SubagentSummary } from '../../types';
 
@@ -12,6 +13,12 @@ export interface MessageListProps {
   onToggleTaskExpanded?: (toolUseId: string) => void;
   isLoading?: boolean;
   isStreaming?: boolean;
+  onRefresh?: () => Promise<'updated' | 'noop'>;
+  refreshFeedback?: {
+    outcome: 'updated' | 'noop';
+    source: 'auto' | 'manual';
+    token: number;
+  } | null;
 }
 
 // Item types for virtual list
@@ -28,12 +35,23 @@ export const MessageList: React.FC<MessageListProps> = ({
   expandedTasks = new Set(),
   onToggleTaskExpanded,
   isLoading,
-  isStreaming
+  isStreaming,
+  onRefresh,
+  refreshFeedback,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const lastMessageCountRef = useRef(0);
   const [showBottomButton, setShowBottomButton] = useState(false);
   const [showTopButton, setShowTopButton] = useState(false);
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const [topNotice, setTopNotice] = useState<string | null>(null);
+  const [showUpdateHint, setShowUpdateHint] = useState(false);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const pullStartYRef = useRef<number | null>(null);
+  const isPullingRef = useRef(false);
+  const noticeTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const activeRefreshTokenRef = useRef<number | null>(null);
 
   // Filter out user messages that only contain tool_result blocks
   const displayMessages = useMemo(() => messages.filter(message => {
@@ -137,6 +155,8 @@ export const MessageList: React.FC<MessageListProps> = ({
         requestAnimationFrame(() => {
           virtualizer.scrollToIndex(virtualItems.length - 1, { align: 'end', behavior: 'smooth' });
         });
+      } else {
+        setShowUpdateHint(true);
       }
     }
     lastMessageCountRef.current = newMessageCount;
@@ -151,8 +171,12 @@ export const MessageList: React.FC<MessageListProps> = ({
       const { scrollTop, scrollHeight, clientHeight } = container;
       const isNearBottom = scrollHeight - scrollTop - clientHeight < 200;
       const isScrolledDown = scrollTop > 500;
+      setIsNearBottom(isNearBottom);
       setShowBottomButton(!isNearBottom);
       setShowTopButton(isScrolledDown);
+      if (isNearBottom) {
+        setShowUpdateHint(false);
+      }
     };
 
     container.addEventListener('scroll', handleScroll);
@@ -198,6 +222,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   // Jump to bottom
   const scrollToBottom = useCallback(() => {
     virtualizer.scrollToIndex(virtualItems.length - 1, { align: 'end', behavior: 'auto' });
+    setShowUpdateHint(false);
   }, [virtualizer, virtualItems.length]);
 
   // Jump to top
@@ -205,6 +230,115 @@ export const MessageList: React.FC<MessageListProps> = ({
     // Use 'auto' instead of 'smooth' for reliable scrolling to top on large lists
     virtualizer.scrollToIndex(0, { align: 'start', behavior: 'auto' });
   }, [virtualizer]);
+
+  const showTransientNotice = useCallback((message: string) => {
+    if (noticeTimerRef.current) {
+      clearTimeout(noticeTimerRef.current);
+    }
+    setTopNotice(message);
+    noticeTimerRef.current = setTimeout(() => {
+      setTopNotice(null);
+      noticeTimerRef.current = null;
+    }, 2200);
+  }, []);
+
+  useEffect(() => {
+    if (!refreshFeedback || refreshFeedback.token === activeRefreshTokenRef.current) {
+      return;
+    }
+
+    activeRefreshTokenRef.current = refreshFeedback.token;
+
+    if (refreshFeedback.outcome === 'noop') {
+      if (refreshFeedback.source === 'manual') {
+        showTransientNotice('暂无最新消息');
+      }
+      return;
+    }
+
+    if (isNearBottom) {
+      showTransientNotice('已更新');
+    } else {
+      setShowUpdateHint(true);
+    }
+  }, [refreshFeedback, isNearBottom, showTransientNotice]);
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) {
+        clearTimeout(noticeTimerRef.current);
+      }
+    };
+  }, []);
+
+  const executeRefresh = useCallback(async () => {
+    if (!onRefresh || isRefreshing) {
+      return;
+    }
+
+    setIsRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setIsRefreshing(false);
+      setPullDistance(0);
+      pullStartYRef.current = null;
+      isPullingRef.current = false;
+    }
+  }, [isRefreshing, onRefresh]);
+
+  const handleTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    const container = containerRef.current;
+    if (!container || container.scrollTop > 0 || isRefreshing) {
+      pullStartYRef.current = null;
+      isPullingRef.current = false;
+      return;
+    }
+
+    pullStartYRef.current = event.touches[0]?.clientY ?? null;
+    isPullingRef.current = true;
+  }, [isRefreshing]);
+
+  const handleTouchMove = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    const container = containerRef.current;
+    if (!container || !isPullingRef.current || pullStartYRef.current === null || isRefreshing) {
+      return;
+    }
+
+    if (container.scrollTop > 0) {
+      setPullDistance(0);
+      isPullingRef.current = false;
+      pullStartYRef.current = null;
+      return;
+    }
+
+    const currentY = event.touches[0]?.clientY ?? pullStartYRef.current;
+    const deltaY = currentY - pullStartYRef.current;
+    if (deltaY <= 0) {
+      setPullDistance(0);
+      return;
+    }
+
+    event.preventDefault();
+    setPullDistance(Math.min(96, deltaY * 0.5));
+  }, [isRefreshing]);
+
+  const handleTouchEnd = useCallback(() => {
+    if (!isPullingRef.current) {
+      setPullDistance(0);
+      return;
+    }
+
+    const shouldRefresh = pullDistance >= 60 && !!onRefresh && !isRefreshing;
+    if (shouldRefresh) {
+      void executeRefresh();
+      return;
+    }
+
+    setPullDistance(0);
+    pullStartYRef.current = null;
+    isPullingRef.current = false;
+  }, [executeRefresh, isRefreshing, onRefresh, pullDistance]);
 
   if (displayMessages.length === 0 && !isLoading) {
     return (
@@ -222,9 +356,47 @@ export const MessageList: React.FC<MessageListProps> = ({
     <div
       className="flex-1 overflow-y-auto bg-background relative"
       ref={containerRef}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
     >
+      <div
+        className="sticky top-3 z-20 flex justify-center pointer-events-none"
+        style={{
+          transform: `translateY(${Math.min(pullDistance, 72)}px)`,
+          opacity: pullDistance > 0 || isRefreshing || topNotice ? 1 : 0,
+          transition: pullDistance > 0 ? 'none' : 'opacity 180ms ease, transform 180ms ease',
+        }}
+      >
+        <div className="rounded-full border border-border/60 bg-background/95 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
+          {isRefreshing
+            ? '更新中...'
+            : topNotice
+              ? topNotice
+              : pullDistance >= 60
+                ? '松手刷新'
+                : '下滑刷新'}
+        </div>
+      </div>
+
       {/* Navigation buttons */}
       <div className="fixed right-6 bottom-32 z-20 flex flex-col gap-2">
+        {onRefresh && (
+          <button
+            onClick={() => void executeRefresh()}
+            disabled={isRefreshing}
+            className="w-10 h-10 rounded-full bg-background border border-border shadow-lg flex items-center justify-center hover:bg-muted transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            title="刷新"
+          >
+            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+          </button>
+        )}
+        {showUpdateHint && (
+          <div className="max-w-[180px] rounded-full bg-background/95 px-3 py-2 text-xs text-muted-foreground shadow-lg border border-border backdrop-blur-sm text-center">
+            已更新，请向下滑
+          </div>
+        )}
         {showTopButton && (
           <button
             onClick={scrollToTop}

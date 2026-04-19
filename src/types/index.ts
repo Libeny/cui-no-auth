@@ -25,6 +25,28 @@ export interface ConversationSummary {
   toolMetrics?: ToolMetrics; // Optional tool usage metrics
 }
 
+export interface SessionListUpdateEventData {
+  sessionId: string;
+  eventType: 'created' | 'modified';
+  metadata: Partial<ConversationSummary> & {
+    sessionId: string;
+    createdAt: string;
+    updatedAt: string;
+    summary: string;
+    projectPath: string;
+    messageCount: number;
+    totalDuration: number;
+    model: string;
+    status: 'completed' | 'ongoing' | 'pending';
+    sessionInfo?: SessionInfo & { sessionId?: string };
+  };
+}
+
+export interface SessionContentUpdateEventData {
+  sessionId: string;
+  updatedAt: string;
+}
+
 export interface ConversationMessage {
   uuid: string;
   type: 'user' | 'assistant' | 'system';
@@ -210,6 +232,8 @@ export type StreamEvent =
   | { type: 'error'; error: string; streamingId: string; timestamp: string }
   | { type: 'closed'; streamingId: string; timestamp: string }
   | { type: 'index_update'; sessionId: string; timestamp: string }
+  | { type: 'session_list_update'; data: SessionListUpdateEventData; timestamp: string }
+  | { type: 'session_content_update'; data: SessionContentUpdateEventData; timestamp: string }
   | SystemInitMessage
   | AssistantStreamMessage
   | UserStreamMessage
@@ -275,6 +299,7 @@ export interface SessionInfo {
   model?: string;               // Model used
   last_scanned_at?: number;     // Timestamp (ms) when the file was last scanned/indexed
   file_path?: string;           // Full path to the log file (optimization)
+  file_size?: number;           // Last observed file size in bytes
 
   // Tool metrics (persisted from indexer)
   lines_added?: number;         // Total lines added across all tool operations

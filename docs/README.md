@@ -20,6 +20,8 @@ A modern web UI for your agents. Start the server and access your agents anywher
 ## Highlights
 
 - **🎨 Modern Design**: Polished, responsive UI that works anywhere
+- **🔍 Sub-agent Drilldown**: Open sub-agent execution progress directly from `Agent(...)` tool blocks
+- **🔄 Auto Refresh + Manual Refresh**: Home and session pages auto-update, with pull-to-refresh and a floating refresh button on session pages
 - **⚡ Parallel Background Agents**: Stream multiple sessions simultaneously
 - **📋 Manage Tasks**: Access all your conversations and fork/resume/archive them
 - **🤖 Multi-Model Support**: Enjoy power of agentic workflows with any model
@@ -54,6 +56,8 @@ A modern web UI for your agents. Start the server and access your agents anywher
 
   cui automatically scans your existing Claude Code history in `~/.claude/` and displays it on the home page, allowing you to resume any of your previous tasks. The dropdown menu in the input area shows all your previous working directories.
 
+  Home/session refresh is now backed by a 15-second directory discovery + file polling fallback, so completed message chunks appear automatically even when a pure watcher path is unreliable.
+
 - **Fork a Task**
 
   To create a branch from an existing task (only supported for tasks started from cui), navigate to the "History" tab on the home page, find the session you want to fork, and resume it with new messages.
@@ -61,6 +65,10 @@ A modern web UI for your agents. Start the server and access your agents anywher
 - **Manage Tasks**
 
   Feel free to close the page after starting a task—it will continue running in the background. When running multiple tasks (started from cui), you can check their status in the "Tasks" tab. You can also archive tasks by clicking the "Archive" button. Archived tasks remain accessible in the "Archived" tab.
+
+- **Inspect Sub-agents**
+
+  When a conversation uses the `Agent(...)` tool, the main conversation keeps the original result block and adds a link to the sub-agent detail page. Sub-agents do not appear in the home list.
 
 ### Dictation
 

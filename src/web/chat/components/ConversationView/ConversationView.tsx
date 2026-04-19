@@ -7,6 +7,13 @@ import { api } from '../../services/api';
 import { useStreaming, useConversationMessages } from '../../hooks';
 import type { ChatMessage, ConversationDetailsResponse, ConversationMessage, ConversationSummary, EnvPreset, SubagentSummary } from '../../types';
 
+type RefreshOutcome = 'updated' | 'noop';
+type RefreshFeedback = {
+  outcome: RefreshOutcome;
+  source: 'auto' | 'manual';
+  token: number;
+};
+
 // Wrapper component to force full remount on session change
 export function ConversationView() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -29,8 +36,10 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   const [subagentByToolUseId, setSubagentByToolUseId] = useState<Record<string, SubagentSummary>>({});
   const [currentWorkingDirectory, setCurrentWorkingDirectory] = useState<string>('');
   const [envPresets, setEnvPresets] = useState<EnvPreset[]>([]);
+  const [refreshFeedback, setRefreshFeedback] = useState<RefreshFeedback | null>(null);
   const composerRef = useRef<ComposerRef>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const messageFingerprintRef = useRef<string>('');
   // activeSessionIdRef is no longer strictly needed for race conditions due to key={sessionId}, 
   // but kept for safety in async callbacks
   const activeSessionIdRef = useRef<string | null>(sessionId || null);
@@ -65,6 +74,10 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
     },
   });
 
+  useEffect(() => {
+    messageFingerprintRef.current = buildMessagesFingerprint(messages);
+  }, [messages]);
+
   // Load env presets for the composer
   useEffect(() => {
     api.getEnvPresets().then(setEnvPresets).catch(() => { /* ignore */ });
@@ -91,8 +104,8 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   }, []);
 
   // Fetch conversation data
-  const fetchConversation = useCallback(async (showLoading = true, shouldFocus = true) => {
-    if (!sessionId) return;
+  const fetchConversation = useCallback(async (showLoading = true, shouldFocus = true): Promise<RefreshOutcome> => {
+    if (!sessionId) return 'noop';
 
     // Cancel any previous request
     if (abortControllerRef.current) {
@@ -114,6 +127,8 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
       });
 
       const chatMessages = convertToChatlMessages(details);
+      const nextFingerprint = buildMessagesFingerprint(chatMessages);
+      const hasUpdatedContent = nextFingerprint !== messageFingerprintRef.current;
       console.log('[ConversationView] 转换后消息数:', chatMessages.length);
 
       // Load all messages from backend
@@ -167,12 +182,15 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
           }
         }
       }
+
+      return hasUpdatedContent ? 'updated' : 'noop';
     } catch (err: any) {
       // Ignore AbortError as it's intentional
-      if (err.name === 'AbortError') return;
+      if (err.name === 'AbortError') return 'noop';
 
       if (showLoading) setError(err.message || 'Failed to load conversation');
       console.error('Failed to refresh conversation:', err);
+      return 'noop';
     } finally {
       if (showLoading) setIsLoading(false);
       
@@ -221,88 +239,20 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   useStreaming(sessionStreamId, {
     onMessage: (event) => {
       if (event.type === 'session_content_update') {
-        // Handle real-time content updates for this session
-        const { messages: newMessages } = event.data;
-
-        if (newMessages && Array.isArray(newMessages)) {
-          console.log('[ConversationView] Received content update, new messages:', newMessages.length);
-
-          // Add each new message to the conversation
-          newMessages.forEach((msg: any) => {
-            handleStreamMessage(msg);
+        if (!streamingId) {
+          void fetchConversation(false, false).then((outcome) => {
+            if (outcome === 'updated') {
+              setRefreshFeedback({
+                outcome,
+                source: 'auto',
+                token: Date.now(),
+              });
+            }
           });
         }
       }
     }
   });
-
-  // Subscribe to session content updates (for historical/completed sessions)
-  useEffect(() => {
-    if (!sessionId || isLoading) return;
-
-    // Generate or retrieve client ID
-    let clientId = sessionStorage.getItem('cui-client-id');
-    if (!clientId) {
-      clientId = `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      sessionStorage.setItem('cui-client-id', clientId);
-    }
-
-    // Subscribe to this session
-    const subscribe = async () => {
-      try {
-        console.log('[ConversationView] Subscribing to session:', sessionId, 'clientId:', clientId);
-
-        const response = await fetch('/api/subscriptions/subscribe', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-client-id': clientId
-          },
-          body: JSON.stringify({ sessionId })
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          console.log('[ConversationView] Subscribed:', data);
-        } else {
-          console.warn('[ConversationView] Subscribe failed:', response.statusText);
-        }
-      } catch (error) {
-        console.error('[ConversationView] Subscribe error:', error);
-      }
-    };
-
-    // Only subscribe if we don't have an active streaming connection
-    // AND if the session is not "ongoing" according to our local state
-    // (This prevents double-updates during active generation)
-    if (!streamingId) {
-      subscribe();
-    }
-
-    // Cleanup: Unsubscribe when leaving
-    return () => {
-      const unsubscribe = async () => {
-        try {
-          console.log('[ConversationView] Unsubscribing from session:', sessionId, 'clientId:', clientId);
-
-          await fetch('/api/subscriptions/unsubscribe', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-client-id': clientId
-            },
-            body: JSON.stringify({ sessionId })
-          });
-
-          console.log('[ConversationView] Unsubscribed');
-        } catch (error) {
-          console.error('[ConversationView] Unsubscribe error:', error);
-        }
-      };
-
-      unsubscribe();
-    };
-  }, [sessionId, streamingId, isLoading]);
 
   const { isConnected, disconnect } = useStreaming(streamingId, {
     onMessage: handleStreamMessage,
@@ -374,6 +324,16 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
     } finally {
       setIsPermissionDecisionLoading(false);
     }
+  };
+
+  const handleManualRefresh = async (): Promise<RefreshOutcome> => {
+    const outcome = await fetchConversation(false, false);
+    setRefreshFeedback({
+      outcome,
+      source: 'manual',
+      token: Date.now(),
+    });
+    return outcome;
   };
 
 
@@ -455,6 +415,8 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
         onToggleTaskExpanded={toggleTaskExpanded}
         isLoading={isLoading}
         isStreaming={!!streamingId}
+        onRefresh={handleManualRefresh}
+        refreshFeedback={refreshFeedback}
       />
 
       <div 
@@ -571,4 +533,20 @@ function buildSubagentMap(messages: ChatMessage[], subagents: SubagentSummary[])
     }
   });
   return mapping;
+}
+
+function buildMessagesFingerprint(messages: ChatMessage[]): string {
+  if (messages.length === 0) {
+    return 'empty';
+  }
+
+  return messages
+    .map((message) => {
+      const contentSignature =
+        typeof message.content === 'string'
+          ? message.content
+          : JSON.stringify(message.content);
+      return `${message.id}:${message.timestamp}:${contentSignature}`;
+    })
+    .join('|');
 }

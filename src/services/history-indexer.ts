@@ -6,8 +6,8 @@ import * as readline from 'readline';
 import { diffLines } from 'diff';
 import { createLogger, type Logger } from './logger.js';
 import { SessionInfoService } from './session-info-service.js';
-import { StreamManager } from './stream-manager.js';
-import { StreamEvent } from '../types/index.js';
+import type { ConversationSummary, SessionInfo } from '../types/index.js';
+import { SessionUpdateBus } from './session-update-bus.js';
 
 interface IndexedMetadata {
   sessionId: string;
@@ -20,6 +20,7 @@ interface IndexedMetadata {
   updatedAt?: string;
   lastScannedAt: number;
   filePath?: string;
+  fileSize?: number;
   // Tool metrics
   linesAdded?: number;
   linesRemoved?: number;
@@ -28,12 +29,15 @@ interface IndexedMetadata {
 }
 
 export class HistoryIndexer {
+  private static readonly POLL_INTERVAL_MS = 15000;
   private logger: Logger;
   private claudeHomePath: string;
   private sessionInfoService: SessionInfoService;
-  private streamManager?: StreamManager;
+  private sessionUpdateBus?: SessionUpdateBus;
   private isRunning: boolean = false;
   private shouldStop: boolean = false;
+  private pollTimer?: NodeJS.Timeout;
+  private isScanInProgress = false;
 
   constructor(sessionInfoService?: SessionInfoService) {
     this.logger = createLogger('HistoryIndexer');
@@ -41,8 +45,8 @@ export class HistoryIndexer {
     this.sessionInfoService = sessionInfoService || SessionInfoService.getInstance();
   }
 
-  setStreamManager(streamManager: StreamManager): void {
-    this.streamManager = streamManager;
+  setSessionUpdateBus(sessionUpdateBus: SessionUpdateBus): void {
+    this.sessionUpdateBus = sessionUpdateBus;
   }
 
   async start(): Promise<void> {
@@ -57,103 +61,55 @@ export class HistoryIndexer {
     // Initial scan to sync DB
     this.logger.info('Starting initial history scan...');
     try {
-      await this.scanAndIndex();
+      await this.runScanCycle();
       this.logger.info('Initial scan completed');
     } catch (error) {
       this.logger.error('Initial scan failed', error);
     }
-    
-    // Start watcher for real-time updates
-    this.startWatcher();
+
+    this.startPolling();
   }
 
   stop(): void {
     this.shouldStop = true;
     this.isRunning = false;
-    // fs.watch returns a FSWatcher which has a close() method.
-    // We'll need to store it to close it.
-    if (this.watcher) {
-        this.watcher.close();
-        this.watcher = undefined;
+    if (this.pollTimer) {
+        clearInterval(this.pollTimer);
+        this.pollTimer = undefined;
     }
   }
 
-  private watcher?: fs.FSWatcher;
-  private pendingUpdates = new Map<string, NodeJS.Timeout>();
-
-  private startWatcher(): void {
+  private startPolling(): void {
     const projectsDir = path.join(this.claudeHomePath, 'projects');
-    
+
     if (!fs.existsSync(projectsDir)) {
-      this.logger.warn(`Projects directory not found for watching: ${projectsDir}`);
+      this.logger.warn(`Projects directory not found for polling: ${projectsDir}`);
       return;
     }
 
-    try {
-      this.logger.info(`Starting file watcher on ${projectsDir}`);
-      
-      this.watcher = fs.watch(projectsDir, { recursive: true }, (eventType, filename) => {
-        if (!filename || this.shouldStop) return;
-
-        // Filter valid files
-        const isJsonl = filename.toString().endsWith('.jsonl');
-        const isAgent = filename.toString().includes('agent-') || filename.toString().startsWith('agent-'); // simple check
-        
-        if (!isJsonl || isAgent) return;
-
-        // Construct full path
-        // filename from fs.watch is relative to projectsDir
-        const fullPath = path.join(projectsDir, filename.toString());
-        
-        // Debounce updates for this file
-        const existingTimer = this.pendingUpdates.get(fullPath);
-        if (existingTimer) clearTimeout(existingTimer);
-
-        this.pendingUpdates.set(fullPath, setTimeout(() => {
-          this.pendingUpdates.delete(fullPath);
-          this.indexSingleFile(fullPath).catch(err => {
-             this.logger.error(`Error indexing file from watcher: ${filename}`, err);
-          });
-        }, 200)); // 200ms debounce for snappier updates
-      });
-      
-      this.watcher.on('error', (error) => {
-        this.logger.error('File watcher error', error);
-      });
-
-    } catch (error) {
-      this.logger.error('Failed to start file watcher', error);
+    if (this.pollTimer) {
+      return;
     }
+
+    this.logger.info(`Starting history polling on ${projectsDir}`, {
+      intervalMs: HistoryIndexer.POLL_INTERVAL_MS,
+    });
+
+    this.pollTimer = setInterval(() => {
+      void this.runScanCycle();
+    }, HistoryIndexer.POLL_INTERVAL_MS);
   }
 
-  private async indexSingleFile(filePath: string): Promise<void> {
+  private async runScanCycle(): Promise<void> {
+    if (this.shouldStop || this.isScanInProgress) {
+      return;
+    }
+
+    this.isScanInProgress = true;
     try {
-        // Check if file still exists
-        if (!fs.existsSync(filePath)) return;
-
-        const stats = await fsPromises.stat(filePath);
-        const filename = path.basename(filePath);
-        const sessionId = filename.replace('.jsonl', '');
-        
-        // Extract metadata
-        const metadata = await this.extractMetadata(filePath, sessionId, stats.mtimeMs);
-        
-        if (metadata) {
-            // Upsert single entry
-            await this.sessionInfoService.bulkUpsertIndexedMetadata([{ ...metadata, filePath }]);
-            this.logger.debug(`Updated index for session: ${sessionId}`);
-
-            // Broadcast update event
-            if (this.streamManager) {
-                this.streamManager.broadcast('global', {
-                    type: 'index_update',
-                    sessionId,
-                    timestamp: new Date().toISOString()
-                });
-            }
-        }
-    } catch (error) {
-        this.logger.debug(`Failed to index single file ${filePath}`, error);
+      await this.scanAndIndex();
+    } finally {
+      this.isScanInProgress = false;
     }
   }
 
@@ -165,11 +121,11 @@ export class HistoryIndexer {
       return;
     }
 
-    // Get all known sessions from DB to check last_scanned_at
+    // Get all known sessions from DB to check file state
     const knownSessions = await this.sessionInfoService.getAllSessionInfo();
-    
     const batchSize = 50;
     let currentBatch: IndexedMetadata[] = [];
+    let currentEvents: Array<{ sessionId: string; eventType: 'created' | 'modified'; metadata: IndexedMetadata }> = [];
     
     try {
       const projectDirs = await fsPromises.readdir(projectsDir);
@@ -195,24 +151,30 @@ export class HistoryIndexer {
             const fileStats = await fsPromises.stat(filePath);
             const sessionId = file.replace('.jsonl', '');
             const existingInfo = knownSessions[sessionId];
-            
-            // Skip if file hasn't changed since last scan
-            // Allow 1s buffer for mtime differences
-            if (existingInfo && existingInfo.last_scanned_at && 
-                existingInfo.last_scanned_at >= fileStats.mtimeMs - 1000) {
+            const hasSamePath = existingInfo?.file_path === filePath;
+            const hasSameMtime = existingInfo?.last_scanned_at === fileStats.mtimeMs;
+            const hasSameSize = existingInfo?.file_size === fileStats.size;
+
+            if (existingInfo && hasSamePath && hasSameMtime && hasSameSize) {
               continue;
             }
             
             // Parse and extract metadata
-            const metadata = await this.extractMetadata(filePath, sessionId, fileStats.mtimeMs);
+            const metadata = await this.extractMetadata(filePath, sessionId, fileStats.mtimeMs, fileStats.size);
             if (metadata) {
-              currentBatch.push({ ...metadata, filePath });
+              currentBatch.push(metadata);
+              currentEvents.push({
+                sessionId,
+                eventType: existingInfo ? 'modified' : 'created',
+                metadata,
+              });
             }
             
             // Flush batch if full
             if (currentBatch.length >= batchSize) {
-              await this.sessionInfoService.bulkUpsertIndexedMetadata(currentBatch);
+              await this.flushBatch(currentBatch, currentEvents);
               currentBatch = [];
+              currentEvents = [];
             }
             
           } catch (error) {
@@ -223,7 +185,7 @@ export class HistoryIndexer {
       
       // Flush remaining
       if (currentBatch.length > 0) {
-        await this.sessionInfoService.bulkUpsertIndexedMetadata(currentBatch);
+        await this.flushBatch(currentBatch, currentEvents);
       }
       
     } catch (error) {
@@ -232,7 +194,32 @@ export class HistoryIndexer {
     }
   }
 
-  private async extractMetadata(filePath: string, sessionId: string, mtime: number): Promise<IndexedMetadata | null> {
+  private async flushBatch(
+    rows: IndexedMetadata[],
+    events: Array<{ sessionId: string; eventType: 'created' | 'modified'; metadata: IndexedMetadata }>,
+  ): Promise<void> {
+    await this.sessionInfoService.bulkUpsertIndexedMetadata(rows);
+
+    if (!this.sessionUpdateBus || events.length === 0) {
+      return;
+    }
+
+    for (const event of events) {
+      const current = await this.sessionInfoService.getExistingSessionInfo(event.sessionId);
+      if (!current) {
+        continue;
+      }
+
+      this.sessionUpdateBus.publish({
+        sessionId: event.sessionId,
+        eventType: event.eventType,
+        metadata: this.buildConversationSummaryMetadata(event.sessionId, event.metadata, current),
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+
+  private async extractMetadata(filePath: string, sessionId: string, mtime: number, fileSize: number): Promise<IndexedMetadata | null> {
     return new Promise((resolve, reject) => {
       const fileStream = fs.createReadStream(filePath, { encoding: 'utf-8' });
       const rl = readline.createInterface({
@@ -385,6 +372,8 @@ export class HistoryIndexer {
           createdAt: firstTimestamp || new Date(mtime).toISOString(),
           updatedAt: lastTimestamp || new Date(mtime).toISOString(),
           lastScannedAt: mtime,
+          filePath,
+          fileSize,
           // Tool metrics (only include if there were any tool operations)
           linesAdded: (linesAdded || linesRemoved || editCount || writeCount) ? linesAdded : undefined,
           linesRemoved: (linesAdded || linesRemoved || editCount || writeCount) ? linesRemoved : undefined,
@@ -398,5 +387,36 @@ export class HistoryIndexer {
         reject(err);
       });
     });
+  }
+
+  private buildConversationSummaryMetadata(
+    sessionId: string,
+    metadata: IndexedMetadata,
+    sessionInfo: SessionInfo & { sessionId: string },
+  ): ConversationSummary {
+    return {
+      sessionId,
+      projectPath: metadata.projectPath || '',
+      summary: metadata.summary || 'No summary available',
+      sessionInfo,
+      createdAt: metadata.createdAt || sessionInfo.created_at,
+      updatedAt: metadata.updatedAt || sessionInfo.updated_at,
+      messageCount: metadata.messageCount || 0,
+      totalDuration: metadata.totalDuration || 0,
+      model: metadata.model || 'Unknown',
+      status: 'completed',
+      toolMetrics:
+        metadata.linesAdded !== undefined ||
+        metadata.linesRemoved !== undefined ||
+        metadata.editCount !== undefined ||
+        metadata.writeCount !== undefined
+          ? {
+              linesAdded: metadata.linesAdded ?? 0,
+              linesRemoved: metadata.linesRemoved ?? 0,
+              editCount: metadata.editCount ?? 0,
+              writeCount: metadata.writeCount ?? 0,
+            }
+          : undefined,
+    };
   }
 }

@@ -13,6 +13,9 @@ import { api } from '../../../chat/services/api';
 import { cn } from "../../lib/utils";
 import { EnvPresetDropdown } from './EnvPresetDropdown';
 
+export const SELECT_DIRECTORY_VALUE = 'Select directory';
+export const ALL_DIRECTORIES_VALUE = '__ALL_DIRECTORIES__';
+
 export interface FileSystemEntry {
   name: string;
   type: 'file' | 'directory';
@@ -49,6 +52,7 @@ export interface ComposerProps {
   onDirectoryChange?: (directory: string) => void;
   recentDirectories?: Record<string, { lastDate: string; shortname: string }>;
   getMostRecentWorkingDirectory?: () => string | null;
+  allowAllDirectoriesOption?: boolean;
 
   // Model selection
   model?: string;
@@ -85,20 +89,23 @@ interface DirectoryDropdownProps {
   selectedDirectory: string;
   recentDirectories: Record<string, { lastDate: string; shortname: string }>;
   onDirectorySelect: (directory: string) => void;
+  allowAllDirectoriesOption?: boolean;
 }
 
 function DirectoryDropdown({ 
   selectedDirectory, 
   recentDirectories, 
-  onDirectorySelect 
+  onDirectorySelect,
+  allowAllDirectoriesOption = false,
 }: DirectoryDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   // Convert recentDirectories to sorted array and create options
-  const options: DropdownOption<string>[] = Object.entries(recentDirectories)
+  const directoryOptions: DropdownOption<string>[] = Object.entries(recentDirectories)
     .map(([path, data]) => ({
       value: path,
-      label: data.shortname,
+      label: path,
+      description: data.shortname !== path ? data.shortname : undefined,
     }))
     .sort((a, b) => {
       const dateA = recentDirectories[a.value].lastDate;
@@ -106,10 +113,26 @@ function DirectoryDropdown({
       return new Date(dateB).getTime() - new Date(dateA).getTime();
     });
 
-  // Get shortname for display
-  const displayText = selectedDirectory === 'Select directory' 
-    ? selectedDirectory
-    : recentDirectories[selectedDirectory]?.shortname || selectedDirectory.split('/').pop() || selectedDirectory;
+  const options: DropdownOption<string>[] = allowAllDirectoriesOption
+    ? [
+        {
+          value: ALL_DIRECTORIES_VALUE,
+          label: '全部目录',
+          description: '显示所有会话，不限定工作目录',
+        },
+        ...directoryOptions,
+      ]
+    : directoryOptions;
+
+  const displayText = (() => {
+    if (selectedDirectory === ALL_DIRECTORIES_VALUE) {
+      return '全部目录';
+    }
+    if (selectedDirectory === SELECT_DIRECTORY_VALUE) {
+      return '选择目录';
+    }
+    return selectedDirectory;
+  })();
 
   return (
     <DropdownSelector
@@ -124,14 +147,29 @@ function DirectoryDropdown({
       placeholder="Enter a directory..."
       showFilterInput={true}
       filterPredicate={(option, searchText) => {
-        // Allow filtering by path
-        if (option.value.toLowerCase().includes(searchText.toLowerCase())) {
-          return true;
-        }
-        // If the search text looks like a path and doesn't match any existing option,
-        // the user can press Enter to add it as a new directory
-        return false;
+        const normalizedSearch = searchText.toLowerCase().trim();
+        if (!normalizedSearch) return true;
+
+        return [
+          option.label,
+          option.description,
+          String(option.value),
+        ]
+          .filter(Boolean)
+          .some((value) => value!.toLowerCase().includes(normalizedSearch));
       }}
+      renderOption={(option) => (
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm text-neutral-900 dark:text-neutral-100">
+            {option.label}
+          </div>
+          {option.description ? (
+            <div className="truncate text-xs text-neutral-500 dark:text-neutral-400">
+              {option.description}
+            </div>
+          ) : null}
+        </div>
+      )}
       renderTrigger={({ onClick }) => (
         <Button
           type="button"
@@ -140,10 +178,11 @@ function DirectoryDropdown({
           className="h-8 px-2 text-muted-foreground hover:bg-muted/50 rounded-full"
           onClick={onClick}
           aria-label="View all code environments"
+          title={displayText}
         >
           <span className="flex items-center gap-1.5">
             <Laptop size={14} />
-            <span className="block max-w-[128px] overflow-hidden text-ellipsis whitespace-nowrap">{displayText}</span>
+            <span className="block max-w-[220px] overflow-hidden text-ellipsis whitespace-nowrap">{displayText}</span>
             <ChevronDown size={14} />
           </span>
         </Button>
@@ -316,6 +355,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   onDirectoryChange,
   recentDirectories = {},
   getMostRecentWorkingDirectory,
+  allowAllDirectoriesOption = false,
   model = 'default',
   onModelChange,
   availableModels = ['default', 'opus', 'sonnet'],
@@ -347,7 +387,9 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     onControlledChange?.(newValue);
   };
 
-  const [selectedDirectory, setSelectedDirectory] = useState(workingDirectory || 'Select directory');
+  const [selectedDirectory, setSelectedDirectory] = useState(
+    workingDirectory || (allowAllDirectoriesOption ? ALL_DIRECTORIES_VALUE : SELECT_DIRECTORY_VALUE)
+  );
   const [selectedModel, setSelectedModel] = useState(model);
   const [selectedPermissionMode, setSelectedPermissionMode] = useState<string>(cachedState.selectedPermissionMode);
   const [isPermissionDropdownOpen, setIsPermissionDropdownOpen] = useState(false);
@@ -389,8 +431,10 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
   useEffect(() => {
     if (workingDirectory) {
       setSelectedDirectory(workingDirectory);
+    } else if (allowAllDirectoriesOption) {
+      setSelectedDirectory(ALL_DIRECTORIES_VALUE);
     }
-  }, [workingDirectory]);
+  }, [workingDirectory, allowAllDirectoriesOption]);
 
   useEffect(() => {
     if (model) {
@@ -420,7 +464,13 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
 
   // Auto-select most recent directory on mount (for Home usage)
   useEffect(() => {
-    if (showDirectorySelector && (!workingDirectory || selectedDirectory === 'Select directory') && Object.keys(recentDirectories).length > 0 && getMostRecentWorkingDirectory) {
+    if (
+      showDirectorySelector &&
+      !allowAllDirectoriesOption &&
+      (!workingDirectory || selectedDirectory === SELECT_DIRECTORY_VALUE) &&
+      Object.keys(recentDirectories).length > 0 &&
+      getMostRecentWorkingDirectory
+    ) {
       const mostRecent = getMostRecentWorkingDirectory();
       if (mostRecent) {
         setSelectedDirectory(mostRecent);
@@ -434,14 +484,18 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
         }
       }
     }
-  }, [workingDirectory, selectedDirectory, recentDirectories, getMostRecentWorkingDirectory, showDirectorySelector, onDirectoryChange, enableFileAutocomplete, onFetchFileSystem]);
+  }, [workingDirectory, selectedDirectory, recentDirectories, getMostRecentWorkingDirectory, showDirectorySelector, onDirectoryChange, enableFileAutocomplete, onFetchFileSystem, allowAllDirectoriesOption]);
 
   // Fetch file system entries when composer is focused (for autocomplete)
   useEffect(() => {
     if (!enableFileAutocomplete || !onFetchFileSystem) return;
 
     const fetchFileSystem = async () => {
-      if (selectedDirectory && selectedDirectory !== 'Select directory') {
+      if (
+        selectedDirectory &&
+        selectedDirectory !== SELECT_DIRECTORY_VALUE &&
+        selectedDirectory !== ALL_DIRECTORIES_VALUE
+      ) {
         try {
           const entries = await onFetchFileSystem(selectedDirectory);
           setLocalFileSystemEntries(entries);
@@ -465,7 +519,11 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
 
     const fetchCommands = async () => {
       try {
-        const commands = await onFetchCommands(selectedDirectory !== 'Select directory' ? selectedDirectory : undefined);
+        const commands = await onFetchCommands(
+          selectedDirectory !== SELECT_DIRECTORY_VALUE && selectedDirectory !== ALL_DIRECTORIES_VALUE
+            ? selectedDirectory
+            : undefined
+        );
         setLocalCommands(commands);
       } catch (error) {
         console.error('Failed to fetch commands:', error);
@@ -684,11 +742,18 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
     if (!trimmedValue || isLoading) return;
 
     // For Home usage with directory/model
-    if (showDirectorySelector && selectedDirectory === 'Select directory') return;
+    if (
+      showDirectorySelector &&
+      (selectedDirectory === SELECT_DIRECTORY_VALUE || selectedDirectory === ALL_DIRECTORIES_VALUE)
+    ) return;
 
     onSubmit(
       trimmedValue,
-      showDirectorySelector ? selectedDirectory : undefined,
+      showDirectorySelector &&
+      selectedDirectory !== SELECT_DIRECTORY_VALUE &&
+      selectedDirectory !== ALL_DIRECTORIES_VALUE
+        ? selectedDirectory
+        : undefined,
       showModelSelector ? selectedModel : undefined,
       permissionMode,
       selectedEnvPresetId
@@ -911,6 +976,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                       selectedDirectory={selectedDirectory}
                       recentDirectories={recentDirectories}
                       onDirectorySelect={handleDirectorySelect}
+                      allowAllDirectoriesOption={allowAllDirectoriesOption}
                     />
                   )}
 
@@ -1058,7 +1124,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
               <div className="flex items-center gap-2">
                 {/* Combined Permission Mode Button with Dropdown */}
                 <div className={`flex items-center rounded-full overflow-hidden ${
-                  (!value.trim() || isLoading || disabled || (showDirectorySelector && selectedDirectory === 'Select directory'))
+                  (!value.trim() || isLoading || disabled || (showDirectorySelector && (selectedDirectory === SELECT_DIRECTORY_VALUE || selectedDirectory === ALL_DIRECTORIES_VALUE)))
                     ? 'bg-foreground/5 text-foreground/50'
                     : 'bg-foreground text-background'
                 }`}>
@@ -1068,7 +1134,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                         <Button
                           type="button"
                           className="h-8 min-w-[48px] w-[48px] px-3 py-0.5 bg-transparent text-inherit hover:bg-white/10 border-0 shadow-none"
-                          disabled={!value.trim() || isLoading || disabled || (showDirectorySelector && selectedDirectory === 'Select directory')}
+                          disabled={!value.trim() || isLoading || disabled || (showDirectorySelector && (selectedDirectory === SELECT_DIRECTORY_VALUE || selectedDirectory === ALL_DIRECTORIES_VALUE))}
                           onClick={() => handleSubmit(selectedPermissionMode)}
                         >
                           {isLoading ? <Loader2 size={14} className="animate-spin" /> : getPermissionModeLabel(selectedPermissionMode)}
@@ -1107,7 +1173,7 @@ export const Composer = forwardRef<ComposerRef, ComposerProps>(function Composer
                         type="button"
                         className="w-8 h-8 bg-transparent text-inherit border-l border-white/20 opacity-80 hover:opacity-100 hover:bg-white/10 border-0 shadow-none rounded-none flex items-center justify-center p-0"
                         onClick={onClick}
-                        disabled={!value.trim() || isLoading || disabled || (showDirectorySelector && selectedDirectory === 'Select directory')}
+                        disabled={!value.trim() || isLoading || disabled || (showDirectorySelector && (selectedDirectory === SELECT_DIRECTORY_VALUE || selectedDirectory === ALL_DIRECTORIES_VALUE))}
                         aria-label="Select permission mode"
                       >
                         <ChevronDown size={14} />

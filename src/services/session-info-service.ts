@@ -25,6 +25,7 @@ type SessionRow = {
   model: string | null;
   last_scanned_at: number | null;
   file_path: string | null;
+  file_size: number | null;
   // Tool metrics
   lines_added: number | null;
   lines_removed: number | null;
@@ -150,6 +151,7 @@ export class SessionInfoService {
       { name: 'model', type: 'TEXT', default: 'NULL' },
       { name: 'last_scanned_at', type: 'INTEGER', default: 'NULL' },
       { name: 'file_path', type: 'TEXT', default: 'NULL' },
+      { name: 'file_size', type: 'INTEGER', default: 'NULL' },
       // Tool metrics
       { name: 'lines_added', type: 'INTEGER', default: 'NULL' },
       { name: 'lines_removed', type: 'INTEGER', default: 'NULL' },
@@ -179,12 +181,12 @@ export class SessionInfoService {
       INSERT INTO sessions (
         session_id, custom_name, created_at, updated_at, version,
         pinned, archived, continuation_session_id, initial_commit_head, permission_mode,
-        summary, project_path, message_count, total_duration, model, last_scanned_at, file_path,
+        summary, project_path, message_count, total_duration, model, last_scanned_at, file_path, file_size,
         lines_added, lines_removed, edit_count, write_count
       ) VALUES (
         @session_id, @custom_name, @created_at, @updated_at, @version,
         @pinned, @archived, @continuation_session_id, @initial_commit_head, @permission_mode,
-        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at, @file_path,
+        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at, @file_path, @file_size,
         @lines_added, @lines_removed, @edit_count, @write_count
       )
     `);
@@ -206,6 +208,7 @@ export class SessionInfoService {
         model=COALESCE(@model, model),
         last_scanned_at=COALESCE(@last_scanned_at, last_scanned_at),
         file_path=COALESCE(@file_path, file_path),
+        file_size=COALESCE(@file_size, file_size),
         lines_added=COALESCE(@lines_added, lines_added),
         lines_removed=COALESCE(@lines_removed, lines_removed),
         edit_count=COALESCE(@edit_count, edit_count),
@@ -217,11 +220,11 @@ export class SessionInfoService {
     this.updateIndexedDataStmt = this.db.prepare(`
       INSERT INTO sessions (
         session_id, created_at, updated_at, version,
-        summary, project_path, message_count, total_duration, model, last_scanned_at, file_path,
+        summary, project_path, message_count, total_duration, model, last_scanned_at, file_path, file_size,
         lines_added, lines_removed, edit_count, write_count
       ) VALUES (
         @session_id, @created_at, @updated_at, 3,
-        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at, @file_path,
+        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at, @file_path, @file_size,
         @lines_added, @lines_removed, @edit_count, @write_count
       )
       ON CONFLICT(session_id) DO UPDATE SET
@@ -232,6 +235,7 @@ export class SessionInfoService {
         model=excluded.model,
         last_scanned_at=excluded.last_scanned_at,
         file_path=excluded.file_path,
+        file_size=excluded.file_size,
         lines_added=excluded.lines_added,
         lines_removed=excluded.lines_removed,
         edit_count=excluded.edit_count,
@@ -276,6 +280,7 @@ export class SessionInfoService {
       model: row.model || undefined,
       last_scanned_at: row.last_scanned_at || undefined,
       file_path: row.file_path || undefined,
+      file_size: row.file_size || undefined,
       // Tool metrics
       lines_added: row.lines_added ?? undefined,
       lines_removed: row.lines_removed ?? undefined,
@@ -322,6 +327,7 @@ export class SessionInfoService {
         model: null,
         last_scanned_at: null,
         file_path: null,
+        file_size: null,
         lines_added: null,
         lines_removed: null,
         edit_count: null,
@@ -344,6 +350,20 @@ export class SessionInfoService {
         initial_commit_head: '',
         permission_mode: 'default'
       };
+    }
+  }
+
+  async getExistingSessionInfo(sessionId: string): Promise<(SessionInfo & { sessionId: string }) | null> {
+    try {
+      const row = this.getSessionStmt.get(sessionId) as SessionRow | undefined;
+      if (!row) return null;
+      return {
+        ...this.mapRow(row),
+        sessionId: row.session_id,
+      };
+    } catch (error) {
+      this.logger.error('Failed to get existing session info', { sessionId, error });
+      return null;
     }
   }
 
@@ -371,6 +391,7 @@ export class SessionInfoService {
         model: undefined,
         last_scanned_at: undefined,
         file_path: undefined,
+        file_size: undefined,
         lines_added: undefined,
         lines_removed: undefined,
         edit_count: undefined,
@@ -396,6 +417,7 @@ export class SessionInfoService {
         model: merged.model || null,
         last_scanned_at: merged.last_scanned_at || null,
         file_path: merged.file_path || null,
+        file_size: merged.file_size || null,
         lines_added: merged.lines_added ?? null,
         lines_removed: merged.lines_removed ?? null,
         edit_count: merged.edit_count ?? null,
@@ -431,6 +453,7 @@ export class SessionInfoService {
     createdAt?: string;
     updatedAt?: string;
     filePath?: string;
+    fileSize?: number;
     linesAdded?: number;
     linesRemoved?: number;
     editCount?: number;
@@ -453,6 +476,7 @@ export class SessionInfoService {
             model: row.model || null,
             last_scanned_at: row.lastScannedAt,
             file_path: row.filePath || null,
+            file_size: row.fileSize ?? null,
             lines_added: row.linesAdded ?? null,
             lines_removed: row.linesRemoved ?? null,
             edit_count: row.editCount ?? null,

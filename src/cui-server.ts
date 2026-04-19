@@ -24,6 +24,8 @@ import { geminiService } from './services/gemini-service.js';
 import { asrService } from './services/asr-service.js';
 import { ClaudeRouterService } from './services/claude-router-service.js';
 import { HistoryIndexer } from './services/history-indexer.js';
+import { SessionUpdateBus } from './services/session-update-bus.js';
+import { SessionUpdateBroadcaster } from './services/session-update-broadcaster.js';
 import { 
   StreamEvent,
   CUIError,
@@ -70,6 +72,8 @@ export class CUIServer {
   private notificationService: NotificationService;
   private webPushService: WebPushService;
   private historyIndexer: HistoryIndexer;
+  private sessionUpdateBus: SessionUpdateBus;
+  private sessionUpdateBroadcaster: SessionUpdateBroadcaster;
   private routerService?: ClaudeRouterService;
   private logger: Logger;
   private port: number;
@@ -114,7 +118,9 @@ export class CUIServer {
     this.notificationService = new NotificationService();
     this.webPushService = WebPushService.getInstance();
     this.historyIndexer = new HistoryIndexer(this.sessionInfoService);
-    this.historyIndexer.setStreamManager(this.streamManager);
+    this.sessionUpdateBus = new SessionUpdateBus();
+    this.sessionUpdateBroadcaster = new SessionUpdateBroadcaster(this.sessionUpdateBus, this.streamManager);
+    this.historyIndexer.setSessionUpdateBus(this.sessionUpdateBus);
     
     // Wire up notification service
     this.processManager.setNotificationService(this.notificationService);
@@ -325,6 +331,7 @@ export class CUIServer {
       });
 
       // Start background tasks
+      this.sessionUpdateBroadcaster.start();
       this.historyIndexer.start();
       
     } catch (error) {
@@ -357,6 +364,9 @@ export class CUIServer {
     if (this.routerService) {
       await this.routerService.stop();
     }
+
+    this.sessionUpdateBroadcaster.stop();
+    this.historyIndexer.stop();
     
     // Stop accepting new connections
     if (this.server) {
@@ -428,6 +438,8 @@ export class CUIServer {
       }
 
       // Disconnect streaming clients
+      this.sessionUpdateBroadcaster.stop();
+      this.historyIndexer.stop();
       this.streamManager.disconnectAll();
       
       this.logger.info('Cleanup completed');
