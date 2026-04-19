@@ -45,6 +45,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   const [showTopButton, setShowTopButton] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [topNotice, setTopNotice] = useState<string | null>(null);
+  const [floatingNotice, setFloatingNotice] = useState<string | null>(null);
   const [showUpdateHint, setShowUpdateHint] = useState(false);
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -235,9 +236,16 @@ export const MessageList: React.FC<MessageListProps> = ({
     if (noticeTimerRef.current) {
       clearTimeout(noticeTimerRef.current);
     }
-    setTopNotice(message);
+    if (message === '暂无最新消息') {
+      setTopNotice(null);
+      setFloatingNotice(message);
+    } else {
+      setFloatingNotice(null);
+      setTopNotice(message);
+    }
     noticeTimerRef.current = setTimeout(() => {
       setTopNotice(null);
+      setFloatingNotice(null);
       noticeTimerRef.current = null;
     }, 2200);
   }, []);
@@ -361,6 +369,12 @@ export const MessageList: React.FC<MessageListProps> = ({
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchEnd}
     >
+      {floatingNotice && (
+        <div className="fixed left-1/2 top-20 z-30 -translate-x-1/2 rounded-full border border-border/60 bg-background/95 px-4 py-2 text-xs text-muted-foreground shadow-lg backdrop-blur-sm">
+          {floatingNotice}
+        </div>
+      )}
+
       <div
         className="sticky top-3 z-20 flex justify-center pointer-events-none"
         style={{

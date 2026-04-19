@@ -182,10 +182,15 @@ export function Home() {
       <Header onRefresh={handleManualRefresh} isRefreshing={isManualRefreshing} />
 
       <main className="relative flex flex-1 w-full h-full overflow-hidden transition-all duration-[250ms] z-[1]">
+        {refreshNotice === '暂无最新消息' && (
+          <div className="pointer-events-none fixed left-1/2 top-20 z-[60] -translate-x-1/2 rounded-full border border-border/60 bg-background/95 px-4 py-2 text-xs text-muted-foreground shadow-lg backdrop-blur-sm">
+            {refreshNotice}
+          </div>
+        )}
         <div className="flex flex-col h-full w-full">
           <div className="z-0 mx-auto flex flex-col w-full max-w-3xl h-full">
             <div className="sticky top-0 z-50 flex flex-col items-center bg-background">
-              {refreshNotice && (
+              {refreshNotice && refreshNotice !== '暂无最新消息' && (
                 <div className="mb-2 rounded-full border border-border/60 bg-background/95 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
                   {refreshNotice}
                 </div>
