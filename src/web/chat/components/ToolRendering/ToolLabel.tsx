@@ -1,14 +1,17 @@
 import React from 'react';
+import type { SubagentSummary } from '../../types';
 import { formatFilePath, formatToolInput, extractDomain } from '../../utils/tool-utils';
 
 interface ToolLabelProps {
   toolName: string;
   toolInput: any;
   workingDirectory?: string;
+  model?: string;
+  subagent?: SubagentSummary;
   onClick?: () => void;
 }
 
-export function ToolLabel({ toolName, toolInput, workingDirectory, onClick }: ToolLabelProps) {
+export function ToolLabel({ toolName, toolInput, workingDirectory, model, subagent, onClick }: ToolLabelProps) {
   
   const generateLabel = (): React.ReactNode => {
     switch (toolName) {
@@ -129,12 +132,24 @@ export function ToolLabel({ toolName, toolInput, workingDirectory, onClick }: To
   };
 
   return (
-    <div 
-      className={`text-sm font-mono text-foreground mb-1 ${onClick ? 'cursor-pointer' : ''}`}
-      onClick={onClick}
-      aria-label={`Tool: ${toolName}`}
-    >
-      {generateLabel()}
+    <div className="mb-1">
+      <div
+        className={`text-sm font-mono text-foreground ${onClick ? 'cursor-pointer' : ''}`}
+        onClick={onClick}
+        aria-label={`Tool: ${toolName}`}
+      >
+        {generateLabel()}
+      </div>
+      {toolName === 'Agent' && subagent ? (
+        <div className="mt-1 text-[11px] text-muted-foreground font-mono">
+          sub-agent: {subagent.subagentId.replace(/^agent-/, '')}
+        </div>
+      ) : null}
+      {model ? (
+        <div className="mt-1 text-[11px] text-muted-foreground font-mono">
+          model: {model}
+        </div>
+      ) : null}
     </div>
   );
 }

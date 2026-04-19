@@ -1,12 +1,13 @@
 import React, { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { MessageItem } from './MessageItem';
-import type { ChatMessage, ToolResult } from '../../types';
+import type { ChatMessage, ToolResult, SubagentSummary } from '../../types';
 
 export interface MessageListProps {
   messages: ChatMessage[];
   toolResults?: Record<string, ToolResult>;
   childrenMessages?: Record<string, ChatMessage[]>;
+  subagentByToolUseId?: Record<string, SubagentSummary>;
   expandedTasks?: Set<string>;
   onToggleTaskExpanded?: (toolUseId: string) => void;
   isLoading?: boolean;
@@ -23,6 +24,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   messages,
   toolResults = {},
   childrenMessages = {},
+  subagentByToolUseId = {},
   expandedTasks = new Set(),
   onToggleTaskExpanded,
   isLoading,
@@ -301,6 +303,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                   message={item.message}
                   toolResults={toolResults}
                   childrenMessages={childrenMessages}
+                  subagentByToolUseId={subagentByToolUseId}
                   expandedTasks={expandedTasks}
                   onToggleTaskExpanded={onToggleTaskExpanded}
                   isFirstInGroup={item.isFirstInGroup}

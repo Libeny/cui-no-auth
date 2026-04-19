@@ -31,6 +31,7 @@ export interface ConversationMessage {
   message: Anthropic.Message | Anthropic.MessageParam;
   timestamp: string;
   sessionId: string; // Claude CLI's actual session ID
+  model?: string;
   parentUuid?: string;
   isSidechain?: boolean; // Whether this message is part of a sidechain conversation
   userType?: string; // Type of user interaction (e.g., 'external')
@@ -160,6 +161,25 @@ export interface ConversationDetailsResponse {
     model: string;
   };
   toolMetrics?: ToolMetrics; // Optional tool usage metrics
+}
+
+export interface SubagentSummary {
+  subagentId: string;
+  sessionId: string;
+  messageCount: number;
+  firstTimestamp?: string;
+  lastTimestamp?: string;
+  model?: string;
+  summary: string;
+}
+
+export interface SubagentDetailsResponse {
+  subagent: SubagentSummary;
+  messages: ConversationMessage[];
+  metadata: {
+    totalDuration: number;
+    model: string;
+  };
 }
 
 

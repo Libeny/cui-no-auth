@@ -4,13 +4,14 @@ import ReactMarkdown from 'react-markdown';
 import { JsonViewer } from '../JsonViewer/JsonViewer';
 import { ToolUseRenderer } from '../ToolRendering/ToolUseRenderer';
 import { CodeHighlight } from '../CodeHighlight';
-import type { ChatMessage, ToolResult } from '../../types';
+import type { ChatMessage, ToolResult, SubagentSummary } from '../../types';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
 
 interface MessageItemProps {
   message: ChatMessage;
   toolResults?: Record<string, ToolResult>;
   childrenMessages?: Record<string, ChatMessage[]>;
+  subagentByToolUseId?: Record<string, SubagentSummary>;
   expandedTasks?: Set<string>;
   onToggleTaskExpanded?: (toolUseId: string) => void;
   isFirstInGroup?: boolean;
@@ -78,6 +79,7 @@ export const MessageItem = React.memo(function MessageItem({
   message, 
   toolResults = {}, 
   childrenMessages = {}, 
+  subagentByToolUseId = {},
   expandedTasks = new Set(), 
   onToggleTaskExpanded,
   isFirstInGroup = true, 
@@ -86,6 +88,32 @@ export const MessageItem = React.memo(function MessageItem({
 }: MessageItemProps) {
   const [copiedBlocks, setCopiedBlocks] = useState<Set<string>>(new Set());
   const [isUserMessageExpanded, setIsUserMessageExpanded] = useState(false);
+
+  const formatMessageTimestamp = (value?: string) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString([], {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+  };
+
+  const metadataRow =
+    message.timestamp || message.model ? (
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground font-mono">
+        {message.timestamp ? <span>{formatMessageTimestamp(message.timestamp)}</span> : null}
+        {message.model ? (
+          <span className="rounded-full border border-border px-2 py-0.5">
+            {message.model}
+          </span>
+        ) : null}
+      </div>
+    ) : null;
 
   const copyContent = async (content: string, blockId: string) => {
     try {
@@ -120,6 +148,7 @@ export const MessageItem = React.memo(function MessageItem({
     return (
       <div className="flex justify-end w-full my-1">
         <div className="relative bg-card text-card-foreground border border-border rounded-xl p-3 max-w-[80%] min-w-[100px]">
+          {metadataRow}
           {shouldShowExpandButton && (
             <button
               onClick={() => setIsUserMessageExpanded(!isUserMessageExpanded)}
@@ -205,7 +234,9 @@ export const MessageItem = React.memo(function MessageItem({
                     toolResult={toolResult}
                     toolResults={toolResults}
                     workingDirectory={message.workingDirectory}
+                    model={message.model}
                     childrenMessages={childrenMessages}
+                    subagent={subagentByToolUseId[block.id]}
                     expandedTasks={expandedTasks}
                     onToggleTaskExpanded={onToggleTaskExpanded}
                   />
@@ -243,6 +274,7 @@ export const MessageItem = React.memo(function MessageItem({
 
     return (
       <div className="relative w-full flex flex-col gap-3 my-1">
+        {metadataRow}
         {renderContent()}
       </div>
     );

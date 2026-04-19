@@ -3,7 +3,15 @@ import * as fsSync from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as readline from 'readline';
-import { ConversationSummary, ConversationMessage, ConversationListQuery, CUIError, ToolMetrics } from '@/types/index.js';
+import {
+  ConversationSummary,
+  ConversationMessage,
+  ConversationListQuery,
+  CUIError,
+  ToolMetrics,
+  SubagentSummary,
+  SubagentDetailsResponse,
+} from '@/types/index.js';
 import { createLogger, type Logger } from './logger.js';
 import { SessionInfoService } from './session-info-service.js';
 import { ToolMetricsService } from './ToolMetricsService.js';
@@ -143,6 +151,94 @@ export class ClaudeHistoryReader {
     }
   }
 
+  async listSubagents(sessionId: string): Promise<SubagentSummary[]> {
+    const sessionFilePath = await this.locateMainSessionFile(sessionId);
+    if (!sessionFilePath) {
+      throw new CUIError('CONVERSATION_NOT_FOUND', `Conversation ${sessionId} not found`, 404);
+    }
+
+    const files = await this.findSubagentFiles(sessionFilePath, sessionId);
+    if (files.length === 0) {
+      return [];
+    }
+
+    const subagents = await Promise.all(
+      files.map(async (filePath) => {
+        const rawEntries = await this.parseJsonlFile(filePath);
+        const messages = this.buildConversationChain(sessionId, rawEntries) || [];
+        const userMessages = messages.filter((message) => message.type === 'user');
+        const assistantMessages = messages.filter((message) => message.type === 'assistant');
+        const fileName = path.basename(filePath);
+        const summary =
+          this.extractFirstText(userMessages[0]?.message) ||
+          this.extractFirstText(assistantMessages[0]?.message) ||
+          fileName.replace(/\.jsonl$/, '');
+        const firstTimestamp = messages[0]?.timestamp;
+        const lastTimestamp = messages[messages.length - 1]?.timestamp;
+        const model =
+          assistantMessages.find((message) => message.model)?.model ||
+          assistantMessages[0]?.model ||
+          '';
+
+        return {
+          subagentId: fileName.replace(/\.jsonl$/, ''),
+          sessionId,
+          messageCount: messages.length,
+          firstTimestamp,
+          lastTimestamp,
+          model,
+          summary,
+        } satisfies SubagentSummary;
+      }),
+    );
+
+    return subagents.sort((a, b) => {
+      const aTime = new Date(a.firstTimestamp || 0).getTime();
+      const bTime = new Date(b.firstTimestamp || 0).getTime();
+      return aTime - bTime;
+    });
+  }
+
+  async fetchSubagentConversation(sessionId: string, subagentId: string): Promise<SubagentDetailsResponse> {
+    const sessionFilePath = await this.locateMainSessionFile(sessionId);
+    if (!sessionFilePath) {
+      throw new CUIError('CONVERSATION_NOT_FOUND', `Conversation ${sessionId} not found`, 404);
+    }
+
+    const subagentFilePath = await this.findSubagentFile(sessionFilePath, sessionId, subagentId);
+    if (!subagentFilePath) {
+      throw new CUIError('SUBAGENT_NOT_FOUND', `Sub-agent ${subagentId} not found`, 404);
+    }
+
+    const entries = await this.parseJsonlFile(subagentFilePath);
+    const messages = this.buildConversationChain(sessionId, entries) || [];
+    const assistantMessages = messages.filter((message) => message.type === 'assistant');
+    const model =
+      assistantMessages.find((message) => message.model)?.model ||
+      assistantMessages[0]?.model ||
+      'Unknown';
+    const totalDuration = messages.reduce((sum, message) => sum + (message.durationMs || 0), 0);
+    const subagents = await this.listSubagents(sessionId);
+    const subagent = subagents.find((item) => item.subagentId === subagentId) || {
+      subagentId,
+      sessionId,
+      messageCount: messages.length,
+      firstTimestamp: messages[0]?.timestamp,
+      lastTimestamp: messages[messages.length - 1]?.timestamp,
+      model,
+      summary: this.extractFirstText(messages[0]?.message) || subagentId,
+    };
+
+    return {
+      subagent,
+      messages: this.messageFilter.filterMessages(messages),
+      metadata: {
+        totalDuration,
+        model,
+      },
+    };
+  }
+
   /**
    * Get conversation metadata
    */
@@ -183,6 +279,54 @@ export class ClaudeHistoryReader {
   private async findProjectPathForSession(sessionId: string): Promise<string | null> {
     const info = await this.sessionInfoService.getSessionInfo(sessionId);
     return info.project_path || null;
+  }
+
+  private async locateMainSessionFile(sessionId: string): Promise<string | null> {
+    const projectsDir = path.join(this.claudeHomePath, 'projects');
+    return this.locateSessionFile(projectsDir, sessionId);
+  }
+
+  private async findSubagentFiles(sessionFilePath: string, sessionId: string): Promise<string[]> {
+    const sessionDir = path.dirname(sessionFilePath);
+    const candidates = new Set<string>();
+
+    const nestedDir = path.join(sessionDir, 'subagents');
+    try {
+      const nestedEntries = await fs.readdir(nestedDir);
+      nestedEntries
+        .filter((entry) => entry.startsWith('agent-') && entry.endsWith('.jsonl'))
+        .forEach((entry) => candidates.add(path.join(nestedDir, entry)));
+    } catch {
+      // ignore
+    }
+
+    try {
+      const siblingEntries = await fs.readdir(sessionDir);
+      siblingEntries
+        .filter((entry) => entry.startsWith('agent-') && entry.endsWith('.jsonl'))
+        .forEach((entry) => candidates.add(path.join(sessionDir, entry)));
+    } catch {
+      // ignore
+    }
+
+    const matches: string[] = [];
+    for (const candidate of candidates) {
+      if (await this.subagentFileBelongsToSession(candidate, sessionId)) {
+        matches.push(candidate);
+      }
+    }
+
+    return matches.sort();
+  }
+
+  private async findSubagentFile(sessionFilePath: string, sessionId: string, subagentId: string): Promise<string | null> {
+    const files = await this.findSubagentFiles(sessionFilePath, sessionId);
+    return files.find((filePath) => path.basename(filePath, '.jsonl') === subagentId) || null;
+  }
+
+  private async subagentFileBelongsToSession(filePath: string, sessionId: string): Promise<boolean> {
+    const entries = await this.parseJsonlFile(filePath);
+    return entries.some((entry) => entry.sessionId === sessionId);
   }
   
   /**
@@ -263,6 +407,32 @@ export class ClaudeHistoryReader {
       return [];
     }
   }
+
+  private extractFirstText(message?: Anthropic.Message | Anthropic.MessageParam): string {
+    if (!message || typeof message !== 'object') {
+      return '';
+    }
+
+    const content = 'content' in message ? message.content : undefined;
+    if (typeof content === 'string') {
+      return content.trim().slice(0, 120);
+    }
+
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block && typeof block === 'object') {
+          if ('text' in block && typeof block.text === 'string' && block.text.trim()) {
+            return block.text.trim().slice(0, 120);
+          }
+          if ('thinking' in block && typeof (block as { thinking?: string }).thinking === 'string' && (block as { thinking?: string }).thinking?.trim()) {
+            return (block as { thinking?: string }).thinking!.trim().slice(0, 120);
+          }
+        }
+      }
+    }
+
+    return '';
+  }
   
   /**
    * Reconstruct conversation chain from flat entries
@@ -276,6 +446,7 @@ export class ClaudeHistoryReader {
         message: entry.message!,
         timestamp: entry.timestamp || '',
         sessionId: entry.sessionId || sessionId,
+        model: typeof entry.message === 'object' && entry.message && 'model' in entry.message ? String(entry.message.model || '') : undefined,
         parentUuid: entry.parentUuid,
         isSidechain: entry.isSidechain,
         userType: entry.userType,

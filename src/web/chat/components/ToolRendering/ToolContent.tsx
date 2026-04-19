@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { CornerDownRight } from 'lucide-react';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
-import type { ChatMessage, ToolResult } from '../../types';
+import type { ChatMessage, ToolResult, SubagentSummary } from '../../types';
 import { ReadTool } from './tools/ReadTool';
 import { EditTool } from './tools/EditTool';
 import { WriteTool } from './tools/WriteTool';
@@ -22,6 +22,7 @@ interface ToolContentProps {
   toolUseId?: string;
   childrenMessages?: Record<string, ChatMessage[]>;
   toolResults?: Record<string, any>;
+  subagent?: SubagentSummary;
 }
 
 export function ToolContent({ 
@@ -31,7 +32,8 @@ export function ToolContent({
   workingDirectory, 
   toolUseId, 
   childrenMessages, 
-  toolResults
+  toolResults,
+  subagent
 }: ToolContentProps) {
   const [isErrorExpanded, setIsErrorExpanded] = useState(false);
   // Extract result content - handle both string and ContentBlockParam[] formats
@@ -57,7 +59,7 @@ export function ToolContent({
   const isPending = toolResult?.status === 'pending';
 
   // Skip rendering for pending tools
-  if (isPending) {
+  if (isPending && toolName !== 'Agent') {
     return null;
   }
 
@@ -167,6 +169,30 @@ export function ToolContent({
           childrenMessages={childrenMessages}
           toolResults={toolResults}
         />
+      );
+
+    case 'Agent':
+      return (
+        <div className="flex flex-col gap-1 -mt-0.5">
+          {!isPending ? (
+            <FallbackTool
+              toolName={toolName}
+              input={toolInput}
+              result={resultContent}
+            />
+          ) : null}
+          <div className="pl-4">
+            <a
+              href={subagent ? `/c/${subagent.sessionId}/subagents/${subagent.subagentId}${window.location.hash || ''}` : undefined}
+              target="_blank"
+              rel="noreferrer"
+              className={`text-sm flex items-center gap-1 ${subagent ? 'text-foreground hover:text-foreground/80 underline underline-offset-4' : 'text-muted-foreground'}`}
+            >
+              <CornerDownRight size={16} />
+              {subagent ? (isPending ? '查看 sub-agent 执行进展' : '查看 sub-agent 执行过程') : 'sub-agent 详情暂不可用'}
+            </a>
+          </div>
+        </div>
       );
     
     case 'exit_plan_mode':

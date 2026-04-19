@@ -3,6 +3,8 @@ import type {
   StartConversationRequest,
   StartConversationResponse,
   ConversationDetailsResponse,
+  SubagentSummary,
+  SubagentDetailsResponse,
   ApiError,
   WorkingDirectoriesResponse,
   PermissionRequest,
@@ -87,6 +89,14 @@ class ApiService {
 
   async getConversationDetails(sessionId: string): Promise<ConversationDetailsResponse> {
     return this.apiCall(`/api/conversations/${sessionId}`);
+  }
+
+  async getConversationSubagents(sessionId: string): Promise<{ subagents: SubagentSummary[] }> {
+    return this.apiCall(`/api/conversations/${sessionId}/subagents`);
+  }
+
+  async getSubagentDetails(sessionId: string, subagentId: string): Promise<SubagentDetailsResponse> {
+    return this.apiCall(`/api/conversations/${sessionId}/subagents/${subagentId}`);
   }
 
   async startConversation(request: StartConversationRequest): Promise<StartConversationResponse> {

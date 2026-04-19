@@ -5,7 +5,7 @@ import { Composer, ComposerRef } from '@/web/chat/components/Composer';
 import { ConversationHeader } from '../ConversationHeader/ConversationHeader';
 import { api } from '../../services/api';
 import { useStreaming, useConversationMessages } from '../../hooks';
-import type { ChatMessage, ConversationDetailsResponse, ConversationMessage, ConversationSummary, EnvPreset } from '../../types';
+import type { ChatMessage, ConversationDetailsResponse, ConversationMessage, ConversationSummary, EnvPreset, SubagentSummary } from '../../types';
 
 // Wrapper component to force full remount on session change
 export function ConversationView() {
@@ -25,6 +25,8 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   const [conversationTitle, setConversationTitle] = useState<string>('Conversation');
   const [isPermissionDecisionLoading, setIsPermissionDecisionLoading] = useState(false);
   const [conversationSummary, setConversationSummary] = useState<ConversationSummary | null>(null);
+  const [subagents, setSubagents] = useState<SubagentSummary[]>([]);
+  const [subagentByToolUseId, setSubagentByToolUseId] = useState<Record<string, SubagentSummary>>({});
   const [currentWorkingDirectory, setCurrentWorkingDirectory] = useState<string>('');
   const [envPresets, setEnvPresets] = useState<EnvPreset[]>([]);
   const composerRef = useRef<ComposerRef>(null);
@@ -187,6 +189,31 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   useEffect(() => {
     fetchConversation(true, true);
   }, [fetchConversation]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+
+    let cancelled = false;
+    api.getConversationSubagents(sessionId)
+      .then((response) => {
+        if (!cancelled) {
+          setSubagents(response.subagents || []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSubagents([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    setSubagentByToolUseId(buildSubagentMap(messages, subagents));
+  }, [messages, subagents]);
 
   // Listen for content updates on session-specific stream
   // Only connect AFTER initial load is complete to prevent connection flooding during rapid switching
@@ -423,6 +450,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
         messages={messages}
         toolResults={toolResults}
         childrenMessages={childrenMessages}
+        subagentByToolUseId={subagentByToolUseId}
         expandedTasks={expandedTasks}
         onToggleTaskExpanded={toggleTaskExpanded}
         isLoading={isLoading}
@@ -513,10 +541,34 @@ function convertToChatlMessages(details: ConversationDetailsResponse): ChatMessa
         type: msg.type as 'user' | 'assistant' | 'system',
         content: content,
         timestamp: msg.timestamp,
+        model: msg.model,
         workingDirectory: msg.cwd, // Add working directory from backend message
       };
     });
 
   console.log('[convertToChatlMessages] 转换完成, 返回消息数:', result.length);
   return result;
+}
+
+function buildSubagentMap(messages: ChatMessage[], subagents: SubagentSummary[]): Record<string, SubagentSummary> {
+  if (subagents.length === 0) return {};
+
+  const agentToolUseIds: string[] = [];
+  for (const message of messages) {
+    if (message.type !== 'assistant' || !Array.isArray(message.content)) continue;
+    for (const block of message.content as any[]) {
+      if (block?.type === 'tool_use' && block?.name === 'Agent' && block?.id) {
+        agentToolUseIds.push(String(block.id));
+      }
+    }
+  }
+
+  const mapping: Record<string, SubagentSummary> = {};
+  agentToolUseIds.forEach((toolUseId, index) => {
+    const subagent = subagents[index];
+    if (subagent) {
+      mapping[toolUseId] = subagent;
+    }
+  });
+  return mapping;
 }

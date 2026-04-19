@@ -5,6 +5,8 @@ import type {
   StartConversationRequest,
   StartConversationResponse,
   ConversationDetailsResponse,
+  SubagentSummary,
+  SubagentDetailsResponse,
   StreamEvent,
   AssistantStreamMessage,
   UserStreamMessage,
@@ -30,6 +32,8 @@ export type {
   StartConversationRequest,
   StartConversationResponse,
   ConversationDetailsResponse,
+  SubagentSummary,
+  SubagentDetailsResponse,
   StreamEvent,
   AssistantStreamMessage,
   UserStreamMessage,
@@ -58,6 +62,7 @@ export interface ChatMessage {
   type: 'user' | 'assistant' | 'system' | 'error';
   content: string | ContentBlock[];
   timestamp: string;
+  model?: string;
   workingDirectory?: string; // Working directory when the message was created
   parentToolUseId?: string; // For nested messages from Task tool use
   // isStreaming removed

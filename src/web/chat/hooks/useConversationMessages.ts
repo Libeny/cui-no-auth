@@ -122,6 +122,7 @@ export function useConversationMessages(options: UseConversationMessagesOptions 
             type: 'user',
             content: event.message.content,
             timestamp: new Date().toISOString(),
+            model: 'model' in event.message ? String((event.message as any).model || '') : undefined,
             workingDirectory: currentWorkingDirectory,
             parentToolUseId: userParentToolUseId,
           };
@@ -146,6 +147,7 @@ export function useConversationMessages(options: UseConversationMessagesOptions 
           type: 'assistant',
           content: Array.isArray(event.message.content) ? event.message.content : [event.message.content],
           timestamp: new Date().toISOString(),
+          model: 'model' in event.message ? String((event.message as any).model || '') : undefined,
           workingDirectory: currentWorkingDirectory,
           parentToolUseId,
         };

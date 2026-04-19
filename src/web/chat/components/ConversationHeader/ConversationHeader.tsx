@@ -10,6 +10,7 @@ import { MoreOptionsMenu } from '../MoreOptionsMenu';
 interface ConversationHeaderProps {
   title: string;
   sessionId?: string;
+  backHref?: string;
   isArchived?: boolean;
   isPinned?: boolean;
   subtitle?: {
@@ -25,7 +26,7 @@ interface ConversationHeaderProps {
   onPinToggle?: (isPinned: boolean) => void;
 }
 
-export function ConversationHeader({ title, sessionId, isArchived = false, isPinned = false, subtitle, onTitleUpdate, onPinToggle }: ConversationHeaderProps) {
+export function ConversationHeader({ title, sessionId, backHref, isArchived = false, isPinned = false, subtitle, onTitleUpdate, onPinToggle }: ConversationHeaderProps) {
   const navigate = useNavigate();
   const [isRenaming, setIsRenaming] = useState(false);
   const [newTitle, setNewTitle] = useState(title);
@@ -40,7 +41,7 @@ export function ConversationHeader({ title, sessionId, isArchived = false, isPin
   }, [title, isRenaming]);
 
   const handleBack = () => {
-    navigate('/');
+    navigate(backHref || '/');
   };
 
   const handleArchive = async () => {

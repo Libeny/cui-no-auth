@@ -11,7 +11,9 @@ import {
   SessionUpdateResponse,
   ConversationMessage,
   ConversationSummary,
-  SessionInfo
+  SessionInfo,
+  SubagentSummary,
+  SubagentDetailsResponse,
 } from '@/types/index.js';
 import { RequestWithRequestId } from '@/types/express.js';
 import { ClaudeProcessManager } from '@/services/claude-process-manager.js';
@@ -314,6 +316,52 @@ export function createConversationRoutes(
       logger.debug('List conversations failed', {
         requestId,
         error: error instanceof Error ? error.message : String(error)
+      });
+      next(error);
+    }
+  });
+
+  router.get('/:sessionId/subagents', async (req: RequestWithRequestId, res, next) => {
+    const requestId = req.requestId;
+    const { sessionId } = req.params;
+
+    logger.debug('List subagents request', {
+      requestId,
+      sessionId,
+    });
+
+    try {
+      const subagents: SubagentSummary[] = await historyReader.listSubagents(sessionId);
+      res.json({ subagents });
+    } catch (error) {
+      logger.debug('List subagents failed', {
+        requestId,
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      next(error);
+    }
+  });
+
+  router.get('/:sessionId/subagents/:subagentId', async (req: RequestWithRequestId, res, next) => {
+    const requestId = req.requestId;
+    const { sessionId, subagentId } = req.params;
+
+    logger.debug('Get subagent details request', {
+      requestId,
+      sessionId,
+      subagentId,
+    });
+
+    try {
+      const response: SubagentDetailsResponse = await historyReader.fetchSubagentConversation(sessionId, subagentId);
+      res.json(response);
+    } catch (error) {
+      logger.debug('Get subagent details failed', {
+        requestId,
+        sessionId,
+        subagentId,
+        error: error instanceof Error ? error.message : String(error),
       });
       next(error);
     }
