@@ -21,6 +21,8 @@ import type {
   CommandsResponse,
   GeminiHealthResponse,
   EnvPreset,
+  TokenUsage,
+  TokenUsageSummary,
 } from '@/types';
 
 // Import ContentBlock from Anthropic SDK
@@ -48,6 +50,8 @@ export type {
   CommandsResponse,
   GeminiHealthResponse,
   EnvPreset,
+  TokenUsage,
+  TokenUsageSummary,
 };
 
 // Chat-specific types
@@ -63,6 +67,7 @@ export interface ChatMessage {
   content: string | ContentBlock[];
   timestamp: string;
   model?: string;
+  usage?: TokenUsage;
   workingDirectory?: string; // Working directory when the message was created
   parentToolUseId?: string; // For nested messages from Task tool use
   // isStreaming removed

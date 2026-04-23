@@ -78,9 +78,9 @@ function convertSubagentMessages(messages: ConversationMessage[]): ChatMessage[]
   return messages
     .filter((msg) => msg.message)
     .map((msg) => {
-      let content = msg.message;
+      let content: ChatMessage['content'] = '';
       if (typeof msg.message === 'object' && 'content' in msg.message) {
-        content = msg.message.content;
+        content = msg.message.content as ChatMessage['content'];
       }
 
       return {
@@ -90,6 +90,7 @@ function convertSubagentMessages(messages: ConversationMessage[]): ChatMessage[]
         content,
         timestamp: msg.timestamp,
         model: msg.model,
+        usage: msg.usage,
         workingDirectory: msg.cwd,
       };
     });

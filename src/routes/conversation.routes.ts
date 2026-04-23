@@ -24,6 +24,7 @@ import { ConfigService } from '@/services/config-service.js';
 import { createLogger } from '@/services/logger.js';
 import { ToolMetricsService } from '@/services/ToolMetricsService.js';
 import { expandPreset, safeLogEnvOverrides } from '@/utils/env-preset.js';
+import { buildTokenUsageSummary } from '@/utils/token-usage.js';
 
 export function createConversationRoutes(
   processManager: ClaudeProcessManager,
@@ -394,7 +395,8 @@ export function createConversationRoutes(
           metadata: {
             totalDuration: metadata.totalDuration,
             model: metadata.model
-          }
+          },
+          usageSummary: buildTokenUsageSummary(messages)
         };
         
         // Add toolMetrics: prefer in-memory (live), fallback to SQLite (persisted)

@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import type { ChatMessage, StreamEvent, ToolResult } from '../types';
 import type { ContentBlock, ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
 import type { PermissionRequest } from '@/types';
+import { normalizeTokenUsage } from '@/utils/token-usage';
 
 interface UseConversationMessagesOptions {
   onUserMessage?: (message: ChatMessage) => void;
@@ -148,6 +149,7 @@ export function useConversationMessages(options: UseConversationMessagesOptions 
           content: Array.isArray(event.message.content) ? event.message.content : [event.message.content],
           timestamp: new Date().toISOString(),
           model: 'model' in event.message ? String((event.message as any).model || '') : undefined,
+          usage: 'usage' in event.message ? normalizeTokenUsage((event.message as any).usage) : undefined,
           workingDirectory: currentWorkingDirectory,
           parentToolUseId,
         };

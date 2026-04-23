@@ -9,6 +9,23 @@ export interface ToolMetrics {
   writeCount: number;
 }
 
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheReadInputTokens: number;
+}
+
+export interface TokenUsageByModel extends TokenUsage {
+  model: string;
+  messageCount: number;
+}
+
+export interface TokenUsageSummary {
+  total: TokenUsage;
+  byModel: TokenUsageByModel[];
+}
+
 // Base conversation types
 export interface ConversationSummary {
   sessionId: string; // Claude CLI's actual session ID (used for history files)
@@ -60,6 +77,7 @@ export interface ConversationMessage {
   cwd?: string; // Working directory when the message was created
   version?: string; // Claude CLI version used for this message
   durationMs?: number;
+  usage?: TokenUsage;
 }
 
 // Stream message types
@@ -183,6 +201,7 @@ export interface ConversationDetailsResponse {
     model: string;
   };
   toolMetrics?: ToolMetrics; // Optional tool usage metrics
+  usageSummary?: TokenUsageSummary;
 }
 
 export interface SubagentSummary {

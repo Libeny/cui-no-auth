@@ -6,6 +6,8 @@ import { Button } from '@/web/chat/components/ui/button';
 import { Input } from '@/web/chat/components/ui/input';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/web/chat/components/ui/tooltip';
 import { MoreOptionsMenu } from '../MoreOptionsMenu';
+import type { TokenUsageSummary } from '../../types';
+import { TokenSummaryPanel } from '../ConversationView/TokenSummaryPanel';
 
 interface ConversationHeaderProps {
   title: string;
@@ -24,9 +26,10 @@ interface ConversationHeaderProps {
   };
   onTitleUpdate?: (newTitle: string) => void;
   onPinToggle?: (isPinned: boolean) => void;
+  usageSummary?: TokenUsageSummary;
 }
 
-export function ConversationHeader({ title, sessionId, backHref, isArchived = false, isPinned = false, subtitle, onTitleUpdate, onPinToggle }: ConversationHeaderProps) {
+export function ConversationHeader({ title, sessionId, backHref, isArchived = false, isPinned = false, subtitle, onTitleUpdate, onPinToggle, usageSummary }: ConversationHeaderProps) {
   const navigate = useNavigate();
   const [isRenaming, setIsRenaming] = useState(false);
   const [newTitle, setNewTitle] = useState(title);
@@ -164,6 +167,8 @@ export function ConversationHeader({ title, sessionId, backHref, isArchived = fa
         </div>
 
         <div className="flex items-center gap-1.5">
+          <TokenSummaryPanel usageSummary={usageSummary} />
+
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

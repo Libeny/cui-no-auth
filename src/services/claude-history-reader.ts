@@ -16,6 +16,7 @@ import { createLogger, type Logger } from './logger.js';
 import { SessionInfoService } from './session-info-service.js';
 import { ToolMetricsService } from './ToolMetricsService.js';
 import { MessageFilter } from './message-filter.js';
+import { normalizeTokenUsage } from '@/utils/token-usage.js';
 import Anthropic from '@anthropic-ai/sdk';
 
 // Import RawJsonEntry locally
@@ -451,6 +452,7 @@ export class ClaudeHistoryReader {
         timestamp: entry.timestamp || '',
         sessionId: entry.sessionId || sessionId,
         model: typeof entry.message === 'object' && entry.message && 'model' in entry.message ? String(entry.message.model || '') : undefined,
+        usage: typeof entry.message === 'object' && entry.message && 'usage' in entry.message ? normalizeTokenUsage((entry.message as { usage?: unknown }).usage) : undefined,
         parentUuid: entry.parentUuid,
         isSidechain: entry.isSidechain,
         userType: entry.userType,

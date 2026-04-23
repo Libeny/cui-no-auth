@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import { MessageList } from '../MessageList/MessageList';
 import { Composer, ComposerRef } from '@/web/chat/components/Composer';
@@ -6,6 +6,7 @@ import { ConversationHeader } from '../ConversationHeader/ConversationHeader';
 import { api } from '../../services/api';
 import { useStreaming, useConversationMessages } from '../../hooks';
 import type { ChatMessage, ConversationDetailsResponse, ConversationMessage, ConversationSummary, EnvPreset, SubagentSummary } from '../../types';
+import { buildTokenUsageSummary } from '@/utils/token-usage';
 
 type RefreshOutcome = 'updated' | 'noop';
 type RefreshFeedback = {
@@ -74,6 +75,13 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
     },
   });
 
+  const usageSummary = useMemo(() => {
+    return buildTokenUsageSummary([
+      ...messages,
+      ...Object.values(childrenMessages).flat(),
+    ]);
+  }, [messages, childrenMessages]);
+
   useEffect(() => {
     messageFingerprintRef.current = buildMessagesFingerprint(messages);
   }, [messages]);
@@ -123,7 +131,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
 
       console.log('[ConversationView] API 返回数据:', {
         messagesCount: details.messages?.length,
-        totalMessages: details.totalMessages
+        totalMessages: details.messages?.length
       });
 
       const chatMessages = convertToChatlMessages(details);
@@ -394,6 +402,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
             });
           }
         }}
+        usageSummary={usageSummary}
       />
       
       {error && (
@@ -490,11 +499,11 @@ function convertToChatlMessages(details: ConversationDetailsResponse): ChatMessa
 
   const result = filtered.map(msg => {
       // Extract content from the message structure
-      let content = msg.message;
+      let content: ChatMessage['content'] = '';
 
       // Handle Anthropic message format
       if (typeof msg.message === 'object' && 'content' in msg.message) {
-        content = msg.message.content;
+        content = msg.message.content as ChatMessage['content'];
       }
 
       return {
@@ -504,6 +513,7 @@ function convertToChatlMessages(details: ConversationDetailsResponse): ChatMessa
         content: content,
         timestamp: msg.timestamp,
         model: msg.model,
+        usage: msg.usage,
         workingDirectory: msg.cwd, // Add working directory from backend message
       };
     });

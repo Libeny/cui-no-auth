@@ -6,6 +6,7 @@ import { ToolUseRenderer } from '../ToolRendering/ToolUseRenderer';
 import { CodeHighlight } from '../CodeHighlight';
 import type { ChatMessage, ToolResult, SubagentSummary } from '../../types';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
+import { formatMessageUsage } from '../../utils/token-format';
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -104,12 +105,13 @@ export const MessageItem = React.memo(function MessageItem({
   };
 
   const metadataRow =
-    message.timestamp || message.model ? (
+    message.timestamp || message.model || message.usage ? (
       <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground font-mono">
         {message.timestamp ? <span>{formatMessageTimestamp(message.timestamp)}</span> : null}
-        {message.model ? (
-          <span className="rounded-full border border-border px-2 py-0.5">
-            {message.model}
+        {message.model || message.usage ? (
+          <span className="rounded-full border border-border/70 px-2 py-0.5" title={message.usage ? formatMessageUsage(message.usage) : undefined}>
+            {message.model ? <strong className="font-semibold text-foreground">[{message.model}] </strong> : null}
+            {message.usage ? <span>{formatMessageUsage(message.usage)}</span> : null}
           </span>
         ) : null}
       </div>
