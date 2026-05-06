@@ -1,8 +1,14 @@
 import React, { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, MessageSquareText } from 'lucide-react';
 import { MessageItem } from './MessageItem';
 import type { ChatMessage, ToolResult, SubagentSummary } from '../../types';
+import { buildConversationTurnOutline, type ConversationTurnOutlineItem } from '../../utils/usage-aggregation';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/web/chat/components/ui/popover';
 
 export interface MessageListProps {
   messages: ChatMessage[];
@@ -14,6 +20,7 @@ export interface MessageListProps {
   isLoading?: boolean;
   isStreaming?: boolean;
   onRefresh?: () => Promise<'updated' | 'noop'>;
+  showConversationOutline?: boolean;
   refreshFeedback?: {
     outcome: 'updated' | 'noop';
     source: 'auto' | 'manual';
@@ -37,6 +44,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   isLoading,
   isStreaming,
   onRefresh,
+  showConversationOutline = false,
   refreshFeedback,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -53,6 +61,8 @@ export const MessageList: React.FC<MessageListProps> = ({
   const isPullingRef = useRef(false);
   const noticeTimerRef = useRef<NodeJS.Timeout | null>(null);
   const activeRefreshTokenRef = useRef<number | null>(null);
+  const pendingScrollTargetRef = useRef<string | null>(null);
+  const scrollRetryTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
 
   // Filter out user messages that only contain tool_result blocks
   const displayMessages = useMemo(() => messages.filter(message => {
@@ -276,6 +286,8 @@ export const MessageList: React.FC<MessageListProps> = ({
       if (noticeTimerRef.current) {
         clearTimeout(noticeTimerRef.current);
       }
+      scrollRetryTimersRef.current.forEach(timer => clearTimeout(timer));
+      scrollRetryTimersRef.current = [];
     };
   }, []);
 
@@ -348,27 +360,104 @@ export const MessageList: React.FC<MessageListProps> = ({
     isPullingRef.current = false;
   }, [executeRefresh, isRefreshing, onRefresh, pullDistance]);
 
+  const virtualRows = virtualizer.getVirtualItems();
+  const messageIndexById = useMemo(() => {
+    const indexById = new Map<string, number>();
+    virtualItems.forEach((item, index) => {
+      if (item.type === 'message') {
+        indexById.set(item.message.messageId, index);
+      }
+    });
+    return indexById;
+  }, [virtualItems]);
+
+  const scrollToMessage = useCallback((messageId: string) => {
+    const index = messageIndexById.get(messageId);
+    if (index === undefined) {
+      pendingScrollTargetRef.current = messageId;
+      return;
+    }
+
+    pendingScrollTargetRef.current = null;
+    scrollRetryTimersRef.current.forEach(timer => clearTimeout(timer));
+    scrollRetryTimersRef.current = [];
+
+    const targetElementId = getMessageElementId(messageId);
+    const refineScroll = (attempt: number) => {
+      const container = containerRef.current;
+      const target = document.getElementById(targetElementId);
+
+      if (!container) {
+        return;
+      }
+
+      if (target) {
+        const containerRect = container.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const top = container.scrollTop + targetRect.top - containerRect.top - 12;
+        container.scrollTo({
+          top: Math.max(0, top),
+          behavior: attempt === 0 ? 'smooth' : 'auto',
+        });
+
+        if (attempt < 2) {
+          const timer = setTimeout(() => refineScroll(attempt + 1), 90);
+          scrollRetryTimersRef.current.push(timer);
+        }
+        return;
+      }
+
+      if (attempt >= 6) {
+        return;
+      }
+
+      virtualizer.scrollToIndex(index, { align: 'start', behavior: 'auto' });
+      const timer = setTimeout(() => refineScroll(attempt + 1), 50);
+      scrollRetryTimersRef.current.push(timer);
+    };
+
+    virtualizer.scrollToIndex(index, { align: 'start', behavior: 'auto' });
+    requestAnimationFrame(() => refineScroll(0));
+  }, [messageIndexById, virtualizer]);
+
+  useEffect(() => {
+    const pendingTarget = pendingScrollTargetRef.current;
+    if (pendingTarget && messageIndexById.has(pendingTarget)) {
+      scrollToMessage(pendingTarget);
+    }
+  }, [messageIndexById, scrollToMessage]);
+
+  const outlineItems = useMemo(
+    () => buildConversationTurnOutline(displayMessages),
+    [displayMessages]
+  );
+  const shouldShowOutline = showConversationOutline && outlineItems.length > 1;
+
   if (displayMessages.length === 0 && !isLoading) {
     return (
-      <div className="flex-1 overflow-y-auto bg-background">
-        <div className="text-center p-8 text-muted-foreground">
-          <p>No messages yet. Start by typing a message below.</p>
+      <div className="flex-1 min-h-0 bg-background">
+        <div className="h-full overflow-y-auto">
+          <div className="text-center p-8 text-muted-foreground">
+            <p>No messages yet. Start by typing a message below.</p>
+          </div>
         </div>
       </div>
     );
   }
 
-  const virtualRows = virtualizer.getVirtualItems();
-
   return (
-    <div
-      className="flex-1 overflow-y-auto bg-background relative"
-      ref={containerRef}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-      onTouchCancel={handleTouchEnd}
-    >
+    <div className="flex-1 min-h-0 bg-background relative flex">
+      {shouldShowOutline ? (
+        <ConversationTurnsPopover items={outlineItems} onJumpToMessage={scrollToMessage} />
+      ) : null}
+      <div
+        className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-background relative"
+        ref={containerRef}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchEnd}
+      >
       {floatingNotice && (
         <div className="fixed left-1/2 top-20 z-30 -translate-x-1/2 rounded-full border border-border/60 bg-background/95 px-4 py-2 text-xs text-muted-foreground shadow-lg backdrop-blur-sm">
           {floatingNotice}
@@ -435,11 +524,11 @@ export const MessageList: React.FC<MessageListProps> = ({
         )}
       </div>
       <div
-        className="relative w-full"
+        className="relative w-full min-w-0 overflow-x-hidden"
         style={{ height: `${virtualizer.getTotalSize()}px` }}
       >
         <div
-          className="absolute top-0 left-0 w-full"
+        className="absolute top-0 left-0 w-full min-w-0 overflow-x-hidden"
           style={{ transform: `translateY(${virtualRows[0]?.start ?? 0}px)` }}
         >
           {virtualRows.map((virtualRow) => {
@@ -481,6 +570,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             return (
               <div
                 key={item.message.messageId}
+                id={getMessageElementId(item.message.messageId)}
                 data-index={virtualRow.index}
                 ref={virtualizer.measureElement}
                 className="flex flex-col gap-2 px-4 py-1 max-w-3xl mx-auto w-full box-border"
@@ -492,6 +582,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                   subagentByToolUseId={subagentByToolUseId}
                   expandedTasks={expandedTasks}
                   onToggleTaskExpanded={onToggleTaskExpanded}
+                  onJumpToMessage={scrollToMessage}
                   isFirstInGroup={item.isFirstInGroup}
                   isLastInGroup={item.isLastInGroup}
                   isStreaming={isStreaming}
@@ -504,6 +595,102 @@ export const MessageList: React.FC<MessageListProps> = ({
           })}
         </div>
       </div>
+      </div>
     </div>
   );
 };
+
+function ConversationTurnsPopover({
+  items,
+  onJumpToMessage,
+}: {
+  items: ConversationTurnOutlineItem[];
+  onJumpToMessage: (messageId: string) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const handleJump = (messageId: string) => {
+    setIsOpen(false);
+    onJumpToMessage(messageId);
+  };
+
+  return (
+    <div
+      className="pointer-events-none fixed left-0 top-20 bottom-56 z-30 hidden overflow-hidden px-3 xl:block"
+      style={{ width: 'max(0px, calc((100vw - 48rem) / 2))' }}
+    >
+      <Popover open={isOpen} onOpenChange={setIsOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-background/95 px-2.5 py-1.5 text-xs font-mono text-muted-foreground shadow-sm backdrop-blur-sm hover:bg-muted hover:text-foreground transition-colors"
+            aria-label="打开 Turns 导航"
+            title="Turns"
+          >
+            <MessageSquareText size={13} className="shrink-0" />
+            <span>Turns</span>
+            <span className="text-[10px] text-muted-foreground/80">{items.length}</span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          sideOffset={8}
+          collisionPadding={{ top: 80, right: 16, bottom: 224, left: 16 }}
+          className="pointer-events-auto min-w-0 overscroll-contain overflow-y-auto overflow-x-hidden p-2 rounded-lg"
+          style={{
+            width: 'min(420px, calc((100vw - 48rem) / 2 - 1.5rem))',
+            maxWidth: 'calc(100vw - 2rem)',
+            maxHeight: 'min(var(--radix-popover-content-available-height), calc(100vh - 22rem))',
+          }}
+        >
+          <div className="mb-2 flex items-center justify-between px-1 text-xs font-mono text-muted-foreground">
+            <span>Turns</span>
+            <span>{items.length}</span>
+          </div>
+          <div className="grid gap-2">
+            {items.map((item) => (
+              <section key={item.id} className="min-w-0 border-t border-border/60 pt-2 first:border-t-0">
+                <div className="mb-2 flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+                  <span className="h-px flex-1 bg-border/60" />
+                  <span>Turn {item.index}</span>
+                  <span className="h-px flex-1 bg-border/60" />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleJump(item.userMessageId)}
+                  className="group flex w-full min-w-0 justify-end text-left"
+                  title={item.prompt}
+                >
+                  <div className="min-w-0 max-w-[88%] overflow-hidden rounded-md border border-border/70 bg-card px-2 py-1.5 text-right transition-colors group-hover:bg-muted">
+                    <div className="mb-1 font-mono text-[10px] text-muted-foreground">User</div>
+                    <div className="line-clamp-3 overflow-hidden break-all text-xs text-card-foreground [overflow-wrap:anywhere]">
+                      {item.prompt}
+                    </div>
+                  </div>
+                </button>
+                {item.responseMessageId ? (
+                  <button
+                    type="button"
+                    onClick={() => handleJump(item.responseMessageId!)}
+                    className="group mt-1.5 flex w-full min-w-0 justify-start text-left"
+                    title={item.response || 'No final text'}
+                  >
+                    <div className="min-w-0 max-w-[88%] overflow-hidden rounded-md border border-border/60 bg-background px-2 py-1.5 transition-colors group-hover:bg-muted">
+                      <div className="mb-1 font-mono text-[10px] text-muted-foreground">Response</div>
+                      <div className="line-clamp-3 overflow-hidden break-all text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                        {item.response || 'No final text'}
+                      </div>
+                    </div>
+                  </button>
+                ) : null}
+              </section>
+            ))}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
+function getMessageElementId(messageId: string): string {
+  return `message-${messageId}`;
+}

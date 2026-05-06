@@ -6,7 +6,7 @@ import { ConversationHeader } from '../ConversationHeader/ConversationHeader';
 import { api } from '../../services/api';
 import { useStreaming, useConversationMessages } from '../../hooks';
 import type { ChatMessage, ConversationDetailsResponse, ConversationMessage, ConversationSummary, EnvPreset, SubagentSummary, TokenUsageSummary } from '../../types';
-import { buildTokenUsageSummary } from '@/utils/token-usage';
+import { annotateMessagesWithUsagePresentation, buildUniqueTokenUsageSummary } from '../../utils/usage-aggregation';
 
 type RefreshOutcome = 'updated' | 'noop';
 type RefreshFeedback = {
@@ -90,7 +90,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   });
 
   const usageSummary = useMemo(() => {
-    return backendUsageSummary || buildTokenUsageSummary([
+    return backendUsageSummary || buildUniqueTokenUsageSummary([
       ...messages,
       ...Object.values(childrenMessages).flat(),
     ]);
@@ -462,56 +462,56 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
         isLoading={isLoading}
         isStreaming={!!streamingId}
         onRefresh={handleManualRefresh}
+        showConversationOutline
         refreshFeedback={refreshFeedback}
       />
 
-      {resolvedProvider === 'claude' && (
-        <div
-          className="sticky bottom-0 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm z-10 w-full flex justify-center px-2 pb-6"
-          aria-label="Message composer section"
-        >
-          <div className="w-full max-w-3xl">
-            <Composer
-              ref={composerRef}
-              onSubmit={handleSendMessage}
-              onStop={handleStop}
-              onPermissionDecision={handlePermissionDecision}
-              isLoading={isConnected || isPermissionDecisionLoading}
-              placeholder="Continue the conversation..."
-              permissionRequest={currentPermissionRequest}
-              showPermissionUI={true}
-              showStopButton={true}
-              showModelSelector={true}
-              enableFileAutocomplete={true}
-              dropdownPosition="above"
-              workingDirectory={conversationSummary?.projectPath}
-              envPresets={envPresets}
-              onFetchFileSystem={async (directory) => {
-                try {
-                  const response = await api.listDirectory({
-                    path: directory || currentWorkingDirectory,
-                    recursive: true,
-                    respectGitignore: true,
-                  });
-                  return response.entries;
-                } catch (error) {
-                  console.error('Failed to fetch file system entries:', error);
-                  return [];
-                }
-              }}
-              onFetchCommands={async (workingDirectory) => {
-                try {
-                  const response = await api.getCommands(workingDirectory || currentWorkingDirectory);
-                  return response.commands;
-                } catch (error) {
-                  console.error('Failed to fetch commands:', error);
-                  return [];
-                }
-              }}
-            />
-          </div>
+      <div
+        className="sticky bottom-0 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm z-10 w-full flex justify-center px-2 pb-6"
+        aria-label="Message composer section"
+      >
+        <div className="w-full max-w-3xl">
+          <Composer
+            ref={composerRef}
+            onSubmit={handleSendMessage}
+            onStop={handleStop}
+            onPermissionDecision={handlePermissionDecision}
+            isLoading={isConnected || isPermissionDecisionLoading}
+            disabled={resolvedProvider !== 'claude'}
+            placeholder={resolvedProvider === 'codex' ? 'Codex conversations are read-only for now' : 'Continue the conversation...'}
+            permissionRequest={currentPermissionRequest}
+            showPermissionUI={resolvedProvider === 'claude'}
+            showStopButton={resolvedProvider === 'claude'}
+            showModelSelector={resolvedProvider === 'claude'}
+            enableFileAutocomplete={resolvedProvider === 'claude'}
+            dropdownPosition="above"
+            workingDirectory={conversationSummary?.projectPath}
+            envPresets={resolvedProvider === 'claude' ? envPresets : []}
+            onFetchFileSystem={async (directory) => {
+              try {
+                const response = await api.listDirectory({
+                  path: directory || currentWorkingDirectory,
+                  recursive: true,
+                  respectGitignore: true,
+                });
+                return response.entries;
+              } catch (error) {
+                console.error('Failed to fetch file system entries:', error);
+                return [];
+              }
+            }}
+            onFetchCommands={async (workingDirectory) => {
+              try {
+                const response = await api.getCommands(workingDirectory || currentWorkingDirectory);
+                return response.commands;
+              } catch (error) {
+                console.error('Failed to fetch commands:', error);
+                return [];
+              }
+            }}
+          />
         </div>
-      )}
+      </div>
 
     </div>
   );
@@ -539,10 +539,14 @@ function convertToChatlMessages(details: ConversationDetailsResponse): ChatMessa
   const result = filtered.map(msg => {
       // Extract content from the message structure
       let content: ChatMessage['content'] = '';
+      let modelCallId: string | undefined;
 
       // Handle Anthropic message format
       if (typeof msg.message === 'object' && 'content' in msg.message) {
         content = msg.message.content as ChatMessage['content'];
+        if ('id' in msg.message && typeof msg.message.id === 'string') {
+          modelCallId = msg.message.id;
+        }
       }
 
       return {
@@ -551,6 +555,7 @@ function convertToChatlMessages(details: ConversationDetailsResponse): ChatMessa
         type: msg.type as 'user' | 'assistant' | 'system',
         content: content,
         timestamp: msg.timestamp,
+        modelCallId,
         model: msg.model,
         usage: msg.usage,
         workingDirectory: msg.cwd, // Add working directory from backend message
@@ -558,7 +563,7 @@ function convertToChatlMessages(details: ConversationDetailsResponse): ChatMessa
     });
 
   console.log('[convertToChatlMessages] 转换完成, 返回消息数:', result.length);
-  return result;
+  return annotateMessagesWithUsagePresentation(result);
 }
 
 function buildSubagentMap(messages: ChatMessage[], subagents: SubagentSummary[]): Record<string, SubagentSummary> {

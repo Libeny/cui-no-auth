@@ -68,8 +68,11 @@ export interface ChatMessage {
   type: 'user' | 'assistant' | 'system' | 'error';
   content: string | ContentBlock[];
   timestamp: string;
+  modelCallId?: string; // Provider model response ID used to dedupe split assistant blocks
   model?: string;
   usage?: TokenUsage;
+  turnUsageSummary?: TokenUsageSummary;
+  turnStartMessageId?: string;
   workingDirectory?: string; // Working directory when the message was created
   parentToolUseId?: string; // For nested messages from Task tool use
   // isStreaming removed

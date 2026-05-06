@@ -25,15 +25,51 @@ export function mapCodexEntriesToConversationMessages(
   const messages: ConversationMessage[] = [];
   const completedToolResults = new Set<string>();
   const seenTokenUsageEvents = new Set<string>();
+  let currentModel = normalizeModel(metadata?.model);
+  let pendingAssistantMessage: ConversationMessage | undefined;
+
+  const appendAssistantContent = (index: number, timestamp: string | undefined, content: any[]): ConversationMessage => {
+    if (!pendingAssistantMessage || pendingAssistantMessage.usage) {
+      pendingAssistantMessage = {
+        uuid: buildMessageId(externalSessionId, index, 'assistant'),
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [],
+        } as any,
+        timestamp: timestamp || '',
+        sessionId: externalSessionId,
+        cwd: metadata?.projectPath,
+      };
+      messages.push(pendingAssistantMessage);
+    }
+
+    const existingContent = (pendingAssistantMessage.message as any).content;
+    if (Array.isArray(existingContent)) {
+      existingContent.push(...content);
+    } else {
+      (pendingAssistantMessage.message as any).content = content;
+    }
+
+    return pendingAssistantMessage;
+  };
 
   entries.forEach((entry, index) => {
     const payload = entry.payload;
     if (!payload || typeof payload !== 'object') return;
 
+    currentModel = extractEntryModel(payload) || currentModel;
+
     if (entry.type === 'response_item' && 'type' in payload) {
       if (payload.type === 'message') {
         const message = mapMessagePayload(payload as CodexMessagePayload);
         if (!message) return;
+        if (message.role === 'assistant') {
+          appendAssistantContent(index, entry.timestamp, Array.isArray(message.content) ? message.content : [{ type: 'text', text: String(message.content) }]);
+          return;
+        }
+
+        pendingAssistantMessage = undefined;
         messages.push({
           uuid: buildMessageId(externalSessionId, index, message.role),
           type: message.role,
@@ -43,9 +79,7 @@ export function mapCodexEntriesToConversationMessages(
           } as any,
           timestamp: entry.timestamp || '',
           sessionId: externalSessionId,
-          model: metadata?.model,
           cwd: metadata?.projectPath,
-          version: metadata?.model,
         });
         return;
       }
@@ -53,36 +87,14 @@ export function mapCodexEntriesToConversationMessages(
       if (payload.type === 'reasoning') {
         const summary = extractReasoningSummary(payload as CodexReasoningPayload);
         if (!summary) return;
-        messages.push({
-          uuid: buildMessageId(externalSessionId, index, 'assistant'),
-          type: 'assistant',
-          message: {
-            role: 'assistant',
-            content: [{ type: 'thinking', thinking: summary }],
-          } as any,
-          timestamp: entry.timestamp || '',
-          sessionId: externalSessionId,
-          model: metadata?.model,
-          cwd: metadata?.projectPath,
-        });
+        appendAssistantContent(index, entry.timestamp, [{ type: 'thinking', thinking: summary }]);
         return;
       }
 
       if (payload.type === 'function_call') {
         const toolUse = mapFunctionCall(payload as CodexFunctionCallPayload);
         if (!toolUse) return;
-        messages.push({
-          uuid: buildMessageId(externalSessionId, index, 'assistant'),
-          type: 'assistant',
-          message: {
-            role: 'assistant',
-            content: [toolUse],
-          } as any,
-          timestamp: entry.timestamp || '',
-          sessionId: externalSessionId,
-          model: metadata?.model,
-          cwd: metadata?.projectPath,
-        });
+        appendAssistantContent(index, entry.timestamp, [toolUse]);
         return;
       }
 
@@ -99,7 +111,6 @@ export function mapCodexEntriesToConversationMessages(
           } as any,
           timestamp: entry.timestamp || '',
           sessionId: externalSessionId,
-          model: metadata?.model,
           cwd: metadata?.projectPath,
         });
       }
@@ -118,7 +129,6 @@ export function mapCodexEntriesToConversationMessages(
         } as any,
         timestamp: entry.timestamp || '',
         sessionId: externalSessionId,
-        model: metadata?.model,
         cwd: metadata?.projectPath,
       });
     }
@@ -131,10 +141,16 @@ export function mapCodexEntriesToConversationMessages(
       if (seenTokenUsageEvents.has(signature)) return;
       seenTokenUsageEvents.add(signature);
 
-      const target = findLatestAssistantMessageWithoutUsage(messages);
+      const target = pendingAssistantMessage && !pendingAssistantMessage.usage
+        ? pendingAssistantMessage
+        : findLatestAssistantMessageWithoutUsage(messages);
       if (target) {
         target.usage = usage;
+        if (currentModel) {
+          target.model = currentModel;
+        }
       }
+      pendingAssistantMessage = undefined;
     }
   });
 
@@ -271,6 +287,24 @@ function findLatestAssistantMessageWithoutUsage(messages: ConversationMessage[])
   }
 
   return undefined;
+}
+
+function extractEntryModel(payload: object): string | undefined {
+  if ('model_provider' in payload && payload.model_provider && typeof payload.model_provider === 'object') {
+    const providerModel = (payload.model_provider as { model?: unknown }).model;
+    const normalized = normalizeModel(providerModel);
+    if (normalized) return normalized;
+  }
+
+  if ('model' in payload) {
+    return normalizeModel(payload.model);
+  }
+
+  return undefined;
+}
+
+function normalizeModel(model: unknown): string | undefined {
+  return typeof model === 'string' && model.trim() ? model : undefined;
 }
 
 function mapMessagePayload(payload: CodexMessagePayload): { role: MessageRole; content: any } | null {

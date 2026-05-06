@@ -16,8 +16,8 @@ export function formatMessageUsage(usage: TokenUsage): string {
   return [
     `${formatTokenCount(usage.inputTokens)} in`,
     `${formatTokenCount(usage.outputTokens)} out`,
-    `${formatTokenCount(usage.cacheCreationInputTokens)} cache write`,
     `${formatTokenCount(usage.cacheReadInputTokens)} cache read`,
+    `${formatTokenCount(usage.cacheCreationInputTokens)} cache write`,
   ].join(' · ');
 }
 

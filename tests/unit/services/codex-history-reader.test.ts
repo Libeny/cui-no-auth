@@ -104,16 +104,13 @@ describe('CodexHistoryReader', () => {
 
     const messages = await reader.fetchConversation('codex:session-abc');
 
-    expect(messages.map((message) => message.type)).toEqual(['user', 'assistant', 'assistant', 'user']);
-    expect(messages.map((message) => message.model)).toEqual(['gpt-5.4', 'gpt-5.4', 'gpt-5.4', 'gpt-5.4']);
+    expect(messages.map((message) => message.type)).toEqual(['user', 'assistant', 'user']);
+    expect(messages.map((message) => message.model)).toEqual([undefined, 'gpt-5.4', undefined]);
     expect(messages[0].message).toEqual({ role: 'user', content: 'Run tests' });
     expect(messages[1].message).toMatchObject({
       role: 'assistant',
-      content: [{ type: 'text', text: 'I will run the test command.' }],
-    });
-    expect(messages[2].message).toMatchObject({
-      role: 'assistant',
       content: [
+        { type: 'text', text: 'I will run the test command.' },
         {
           type: 'tool_use',
           id: 'call-1',
@@ -122,13 +119,13 @@ describe('CodexHistoryReader', () => {
         },
       ],
     });
-    expect(messages[2].usage).toEqual({
+    expect(messages[1].usage).toEqual({
       inputTokens: 200,
       outputTokens: 20,
       cacheCreationInputTokens: 0,
       cacheReadInputTokens: 100,
     });
-    expect(messages[3].message).toMatchObject({
+    expect(messages[2].message).toMatchObject({
       role: 'user',
       content: [
         {
@@ -214,7 +211,10 @@ describe('CodexHistoryReader', () => {
 
     expect(messages[1].message).toMatchObject({
       role: 'assistant',
-      content: [{ type: 'thinking', thinking: 'Checked repository shape.' }],
+      content: [
+        { type: 'thinking', thinking: 'Checked repository shape.' },
+        { type: 'text', text: 'Answer' },
+      ],
     });
     expect(JSON.stringify(messages)).not.toContain('sealed-cot');
   });
@@ -251,6 +251,31 @@ describe('CodexHistoryReader', () => {
         },
       ],
     });
+  });
+
+  it('uses the active Codex turn model only on usage-bearing assistant messages', async () => {
+    await writeSessionFile(tempDir, '2026/05/06/rollout-2026-05-06T01-02-03-session-model-switch.jsonl', [
+      sessionMeta({ id: 'session-model-switch', cwd: '/repo/app', model: 'gpt-5.4', timestamp: '2026-05-06T01:02:03.000Z' }),
+      turnContext({ cwd: '/repo/app', model: 'gpt-5.4', timestamp: '2026-05-06T01:02:04.000Z' }),
+      userMessage('session-model-switch', 'First question', '2026-05-06T01:02:05.000Z'),
+      assistantMessage('First answer', '2026-05-06T01:02:06.000Z'),
+      tokenCountEvent({ input_tokens: 100, output_tokens: 10 }, '2026-05-06T01:02:07.000Z', { input_tokens: 100, output_tokens: 10 }),
+      turnContext({ cwd: '/repo/app', model: 'gpt-5.5', timestamp: '2026-05-06T01:02:08.000Z' }),
+      assistantMessage('Second answer', '2026-05-06T01:02:09.000Z'),
+      tokenCountEvent({ input_tokens: 200, output_tokens: 20 }, '2026-05-06T01:02:10.000Z', { input_tokens: 100, output_tokens: 10 }),
+    ]);
+
+    const messages = await reader.fetchConversation('codex:session-model-switch');
+
+    expect(messages.map((message) => ({
+      type: message.type,
+      model: message.model,
+      hasUsage: Boolean(message.usage),
+    }))).toEqual([
+      { type: 'user', model: undefined, hasUsage: false },
+      { type: 'assistant', model: 'gpt-5.4', hasUsage: true },
+      { type: 'assistant', model: 'gpt-5.5', hasUsage: true },
+    ]);
   });
 });
 
@@ -306,6 +331,25 @@ function assistantMessage(text: string, timestamp: string) {
       role: 'assistant',
       content: [{ type: 'output_text', text }],
       phase: 'commentary',
+    },
+  };
+}
+
+function turnContext({
+  cwd,
+  model,
+  timestamp,
+}: {
+  cwd: string;
+  model: string;
+  timestamp: string;
+}) {
+  return {
+    timestamp,
+    type: 'turn_context',
+    payload: {
+      cwd,
+      model,
     },
   };
 }

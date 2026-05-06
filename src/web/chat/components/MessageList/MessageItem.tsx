@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Copy, Check, Code, Globe, Settings, FileText, Edit, Terminal, Search, List, CheckSquare, ExternalLink, Play, FileEdit, ClipboardList, Maximize2, Minimize2 } from 'lucide-react';
+import { Copy, Check, Code, Globe, Settings, FileText, Edit, Terminal, Search, List, CheckSquare, ExternalLink, Play, FileEdit, ClipboardList, Maximize2, Minimize2, CornerUpLeft } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { JsonViewer } from '../JsonViewer/JsonViewer';
 import { ToolUseRenderer } from '../ToolRendering/ToolUseRenderer';
@@ -16,6 +16,7 @@ interface MessageItemProps {
   subagentByToolUseId?: Record<string, SubagentSummary>;
   expandedTasks?: Set<string>;
   onToggleTaskExpanded?: (toolUseId: string) => void;
+  onJumpToMessage?: (messageId: string) => void;
   isFirstInGroup?: boolean;
   isLastInGroup?: boolean;
   isStreaming?: boolean;
@@ -84,6 +85,7 @@ export const MessageItem = React.memo(function MessageItem({
   subagentByToolUseId = {},
   expandedTasks = new Set(), 
   onToggleTaskExpanded,
+  onJumpToMessage,
   isFirstInGroup = true, 
   isLastInGroup = true,
   isStreaming = false
@@ -117,6 +119,46 @@ export const MessageItem = React.memo(function MessageItem({
         ) : null}
       </div>
     ) : null;
+
+  const turnUsageSummary = message.turnUsageSummary;
+  const singleModelTurnUsage = turnUsageSummary?.byModel.length === 1 ? turnUsageSummary.byModel[0] : undefined;
+  const turnUsageRow = turnUsageSummary ? (
+    <div className="mt-2 border-t border-border/60 pt-2 text-[11px] font-mono text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span>Turn total: </span>
+        {singleModelTurnUsage ? (
+          <span className="rounded-full border border-border/70 px-2 py-0.5">
+            <strong className={`font-semibold ${getModelTextClass(singleModelTurnUsage.model)}`}>[{singleModelTurnUsage.model}] </strong>
+            <span>{formatMessageUsage(singleModelTurnUsage)}</span>
+          </span>
+        ) : (
+          <span>{formatMessageUsage(turnUsageSummary.total)}</span>
+        )}
+        {message.turnStartMessageId && onJumpToMessage ? (
+          <button
+            type="button"
+            onClick={() => onJumpToMessage(message.turnStartMessageId!)}
+            className="inline-flex items-center gap-1 rounded-full border border-border/70 px-2 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            title="跳到本轮输入"
+          >
+            <CornerUpLeft size={12} />
+            <span>本轮输入</span>
+          </button>
+        ) : null}
+      </div>
+      {turnUsageSummary.byModel.length > 1 ? (
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          <span>By model:</span>
+          {turnUsageSummary.byModel.map(item => (
+            <span key={item.model} className="rounded-full border border-border/70 px-2 py-0.5">
+              <strong className={`font-semibold ${getModelTextClass(item.model)}`}>[{item.model}] </strong>
+              <span>{formatMessageUsage(item)}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  ) : null;
 
   const copyContent = async (content: string, blockId: string) => {
     try {
@@ -237,7 +279,6 @@ export const MessageItem = React.memo(function MessageItem({
                     toolResult={toolResult}
                     toolResults={toolResults}
                     workingDirectory={message.workingDirectory}
-                    model={message.model}
                     childrenMessages={childrenMessages}
                     subagent={subagentByToolUseId[block.id]}
                     expandedTasks={expandedTasks}
@@ -279,6 +320,7 @@ export const MessageItem = React.memo(function MessageItem({
       <div className="relative w-full flex flex-col gap-3 my-1">
         {metadataRow}
         {renderContent()}
+        {turnUsageRow}
       </div>
     );
   }

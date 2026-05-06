@@ -1,5 +1,26 @@
 # 更新日志
 
+## v0.7.7 (2026-05-07)
+
+### 改进
+- **Codex token usage 展示对齐 Claude Code**：
+  - Codex 不再把会话模型标签复制到每条消息
+  - 仅在可归属到 assistant 响应的 usage 上展示模型和 token 用量
+  - 对 Claude split assistant blocks 做 usage 去重，避免同一次模型调用重复展示
+- **按 turn 聚合 token 用量**：
+  - 每轮 response 底部显示 `Turn total`
+  - 支持按模型聚合显示同一轮中的多模型 usage
+  - token 顺序统一为 `in · out · cache read · cache write`
+- **Turns 导航**：
+  - 新增左侧 `Turns` 入口，按 User / Response 预览每一轮
+  - 点击 User 或 Response 可稳定跳转到对应消息
+  - 面板宽度和高度受限，长内容省略，避免横向滚动和遮挡底部输入框
+
+### 修复
+- Codex 会话底部输入框恢复显示，但保持只读禁用状态
+- 工具卡片不再重复展示模型标签
+- 修复虚拟列表跳转到上文时可能因测量修正导致定位不准的问题
+
 ## v0.7.6 (2026-05-06)
 
 ### 新功能

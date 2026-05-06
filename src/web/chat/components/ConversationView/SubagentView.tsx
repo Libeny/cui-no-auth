@@ -4,6 +4,7 @@ import { ConversationHeader } from '../ConversationHeader/ConversationHeader';
 import { MessageList } from '../MessageList/MessageList';
 import { api } from '../../services/api';
 import type { ChatMessage, ConversationMessage, SubagentDetailsResponse } from '../../types';
+import { annotateMessagesWithUsagePresentation } from '../../utils/usage-aggregation';
 
 export function SubagentView() {
   const { sessionId, subagentId } = useParams<{ sessionId: string; subagentId: string }>();
@@ -75,12 +76,17 @@ export function SubagentView() {
 }
 
 function convertSubagentMessages(messages: ConversationMessage[]): ChatMessage[] {
-  return messages
+  const converted = messages
     .filter((msg) => msg.message)
     .map((msg) => {
       let content: ChatMessage['content'] = '';
+      let modelCallId: string | undefined;
+
       if (typeof msg.message === 'object' && 'content' in msg.message) {
         content = msg.message.content as ChatMessage['content'];
+        if ('id' in msg.message && typeof msg.message.id === 'string') {
+          modelCallId = msg.message.id;
+        }
       }
 
       return {
@@ -89,11 +95,14 @@ function convertSubagentMessages(messages: ConversationMessage[]): ChatMessage[]
         type: msg.type as 'user' | 'assistant' | 'system',
         content,
         timestamp: msg.timestamp,
+        modelCallId,
         model: msg.model,
         usage: msg.usage,
         workingDirectory: msg.cwd,
       };
     });
+
+  return annotateMessagesWithUsagePresentation(converted);
 }
 
 function buildToolResults(messages: ChatMessage[]) {
