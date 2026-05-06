@@ -20,6 +20,18 @@ interface TaskListProps {
   }) => void;
 }
 
+const CODEX_SESSION_PREFIX = 'codex:';
+
+function getProvider(conversation: ConversationSummary): 'claude' | 'codex' {
+  return conversation.provider || (conversation.sessionId.startsWith(CODEX_SESSION_PREFIX) ? 'codex' : 'claude');
+}
+
+function getVisibleSessionId(conversation: ConversationSummary): string {
+  return getProvider(conversation) === 'codex' && conversation.sessionId.startsWith(CODEX_SESSION_PREFIX)
+    ? conversation.sessionId.slice(CODEX_SESSION_PREFIX.length)
+    : conversation.sessionId;
+}
+
 export function TaskList({ 
   scrollRef: externalScrollRef,
   conversations, 
@@ -51,12 +63,13 @@ export function TaskList({
     }
   };
 
-  const handleTaskClick = (sessionId: string) => {
+  const handleTaskClick = (conversation: ConversationSummary) => {
     // Don't navigate if this session is being renamed
-    if (renamingSessionId === sessionId) {
+    if (renamingSessionId === conversation.sessionId) {
       return;
     }
-    navigate(`/c/${sessionId}`);
+    const provider = getProvider(conversation);
+    navigate(`/c/${getVisibleSessionId(conversation)}`, provider === 'codex' ? { state: { provider } } : undefined);
   };
 
   const handleCancelTask = (sessionId: string) => {
@@ -195,33 +208,39 @@ export function TaskList({
 
   return (
     <div ref={scrollRef} className="flex flex-col w-full flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-transparent hover:scrollbar-thumb-border scrollbar-track-transparent">
-      {sortedConversations.map((conversation) => (
+      {sortedConversations.map((conversation) => {
+        const provider = getProvider(conversation);
+        const routeSessionId = getVisibleSessionId(conversation);
+
+        return (
         <div key={conversation.sessionId} data-session-id={conversation.sessionId}>
           <TaskItem
             id={conversation.sessionId}
+            routeSessionId={routeSessionId}
             title={conversation.sessionInfo.custom_name || conversation.summary}
             timestamp={conversation.updatedAt}
             projectPath={conversation.projectPath}
             recentDirectories={recentDirectories}
             status={conversation.status}
+            provider={provider}
             messageCount={conversation.messageCount}
             toolMetrics={conversation.toolMetrics}
             streamingId={conversation.streamingId}
             isArchived={activeTab === 'archive'}
             isPinned={conversation.sessionInfo.pinned}
-            onClick={() => handleTaskClick(conversation.sessionId)}
+            onClick={() => handleTaskClick(conversation)}
             onCancel={
               conversation.status === 'ongoing' 
                 ? () => handleCancelTask(conversation.sessionId)
                 : undefined
             }
             onArchive={
-              conversation.status === 'completed' && activeTab !== 'archive'
+              provider !== 'codex' && conversation.status === 'completed' && activeTab !== 'archive'
                 ? () => handleArchiveTask(conversation.sessionId)
                 : undefined
             }
             onUnarchive={
-              conversation.status === 'completed' && activeTab === 'archive'
+              provider !== 'codex' && conversation.status === 'completed' && activeTab === 'archive'
                 ? () => handleUnarchiveTask(conversation.sessionId)
                 : undefined
             }
@@ -229,10 +248,11 @@ export function TaskList({
             onStartRename={() => handleStartRename(conversation.sessionId)}
             onCancelRename={handleCancelRename}
             onNameUpdate={handleNameUpdate}
-            onPinToggle={handlePinToggle}
+            onPinToggle={provider === 'codex' ? undefined : handlePinToggle}
           />
         </div>
-      ))}
+        );
+      })}
       
       {/* Loading indicator for infinite scroll */}
       {hasMore && (

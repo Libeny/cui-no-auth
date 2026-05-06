@@ -7,6 +7,7 @@ import { CodeHighlight } from '../CodeHighlight';
 import type { ChatMessage, ToolResult, SubagentSummary } from '../../types';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
 import { formatMessageUsage } from '../../utils/token-format';
+import { getModelTextClass } from '../../utils/model-colors';
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -110,7 +111,7 @@ export const MessageItem = React.memo(function MessageItem({
         {message.timestamp ? <span>{formatMessageTimestamp(message.timestamp)}</span> : null}
         {message.model || message.usage ? (
           <span className="rounded-full border border-border/70 px-2 py-0.5" title={message.usage ? formatMessageUsage(message.usage) : undefined}>
-            {message.model ? <strong className="font-semibold text-foreground">[{message.model}] </strong> : null}
+            {message.model ? <strong className={`font-semibold ${getModelTextClass(message.model)}`}>[{message.model}] </strong> : null}
             {message.usage ? <span>{formatMessageUsage(message.usage)}</span> : null}
           </span>
         ) : null}

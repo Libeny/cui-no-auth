@@ -568,7 +568,17 @@ export class SessionInfoService {
    */
   async getConversations(query: ConversationListQuery): Promise<{ conversations: SessionInfo[]; total: number }> {
     try {
-      let sql = 'SELECT * FROM sessions WHERE 1=1';
+      let sql = `
+        SELECT * FROM sessions
+        WHERE session_id NOT LIKE 'codex:%'
+          AND NOT (
+            summary IS NULL
+            AND project_path IS NULL
+            AND message_count IS NULL
+            AND model IS NULL
+            AND file_path IS NULL
+          )
+      `;
       const params: Array<string | number> = [];
       
       // Filtering

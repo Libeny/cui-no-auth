@@ -214,6 +214,8 @@ describe('CUIServer', () => {
       expect((testServer as any).processManager).toBeDefined();
       expect((testServer as any).streamManager).toBeDefined();
       expect((testServer as any).historyReader).toBeDefined();
+      expect((testServer as any).codexHistoryReader).toBeDefined();
+      expect((testServer as any).codexHistoryIndexer).toBeDefined();
     });
   });
 

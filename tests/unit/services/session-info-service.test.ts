@@ -61,5 +61,58 @@ describe('SessionInfoService with SQLite', () => {
     expect(stats.sessionCount).toBe(1);
     expect(stats.lastUpdated).toBeTypeOf('string');
   });
-});
 
+  it('should not return Codex-prefixed placeholder rows in Claude conversation lists', async () => {
+    await service.bulkUpsertIndexedMetadata([
+      {
+        sessionId: 'claude-session',
+        summary: 'Claude task',
+        projectPath: '/repo',
+        messageCount: 1,
+        totalDuration: 0,
+        model: 'claude',
+        lastScannedAt: 1,
+        createdAt: '2026-05-06T00:00:00.000Z',
+        updatedAt: '2026-05-06T00:00:01.000Z',
+      },
+      {
+        sessionId: 'codex:ghost-session',
+        summary: 'No summary available',
+        projectPath: '',
+        messageCount: 0,
+        totalDuration: 0,
+        model: 'Unknown',
+        lastScannedAt: 1,
+        createdAt: '2026-05-06T00:00:00.000Z',
+        updatedAt: '2026-05-06T00:00:02.000Z',
+      },
+    ]);
+
+    const result = await service.getConversations({ limit: 20, offset: 0, sortBy: 'updated', order: 'desc' });
+
+    expect(result.total).toBe(1);
+    expect((result.conversations[0] as any).sessionId).toBe('claude-session');
+  });
+
+  it('should not return empty placeholder rows in conversation lists', async () => {
+    await service.syncMissingSessions(['019df918-b3b9-7682-8aad-8586dc93cf76']);
+    await service.bulkUpsertIndexedMetadata([
+      {
+        sessionId: 'claude-session',
+        summary: 'Claude task',
+        projectPath: '/repo',
+        messageCount: 1,
+        totalDuration: 0,
+        model: 'claude',
+        lastScannedAt: 1,
+        createdAt: '2026-05-06T00:00:00.000Z',
+        updatedAt: '2026-05-06T00:00:01.000Z',
+      },
+    ]);
+
+    const result = await service.getConversations({ limit: 20, offset: 0, sortBy: 'updated', order: 'desc' });
+
+    expect(result.total).toBe(1);
+    expect((result.conversations[0] as any).sessionId).toBe('claude-session');
+  });
+});

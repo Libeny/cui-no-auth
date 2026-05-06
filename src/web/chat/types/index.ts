@@ -1,6 +1,7 @@
 // Re-export necessary types from backend
 import type {
   ConversationSummary,
+  ConversationSourceFilter,
   ConversationMessage,
   StartConversationRequest,
   StartConversationResponse,
@@ -30,6 +31,7 @@ import type { ContentBlock, ContentBlockParam } from '@anthropic-ai/sdk/resource
 
 export type {
   ConversationSummary,
+  ConversationSourceFilter,
   ConversationMessage,
   StartConversationRequest,
   StartConversationResponse,

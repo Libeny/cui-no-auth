@@ -1,0 +1,381 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
+import { CodexHistoryReader } from '@/services/codex/codex-history-reader';
+
+vi.mock('@/services/logger.js', () => ({
+  createLogger: vi.fn(() => ({
+    info: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  })),
+}));
+
+describe('CodexHistoryReader', () => {
+  let tempDir: string;
+  let reader: CodexHistoryReader;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-history-'));
+    reader = new CodexHistoryReader({ codexHomePath: tempDir });
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('lists Codex sessions from dated rollout JSONL files', async () => {
+    await writeSessionFile(tempDir, '2026/05/06/rollout-2026-05-06T01-02-03-session-123.jsonl', [
+      sessionMeta({ id: 'session-123', cwd: '/repo/app', model: 'gpt-5.4', timestamp: '2026-05-06T01:02:03.000Z' }),
+      userMessage('session-123', 'Build the Codex viewer', '2026-05-06T01:02:04.000Z'),
+      assistantMessage('Working on it', '2026-05-06T01:02:05.000Z'),
+    ]);
+
+    const result = await reader.listConversations();
+
+    expect(result.total).toBe(1);
+    expect(result.conversations[0]).toEqual(
+      expect.objectContaining({
+        sessionId: 'codex:session-123',
+        projectPath: '/repo/app',
+        summary: 'Build the Codex viewer',
+        messageCount: 2,
+        model: 'gpt-5.4',
+        createdAt: '2026-05-06T01:02:03.000Z',
+        updatedAt: '2026-05-06T01:02:05.000Z',
+        status: 'completed',
+      }),
+    );
+  });
+
+  it('serves cached conversation metadata while an index scan is already running', async () => {
+    const cached = {
+      sessionId: 'codex:cached-session',
+      rawSessionId: 'cached-session',
+      filePath: path.join(tempDir, 'sessions/2026/05/06/rollout-cached-session.jsonl'),
+      projectPath: '/repo/cached',
+      summary: 'Cached Codex task',
+      messageCount: 3,
+      totalDuration: 0,
+      model: 'gpt-5.4',
+      createdAt: '2026-05-06T01:02:03.000Z',
+      updatedAt: '2026-05-06T01:02:06.000Z',
+      fileSize: 123,
+      lastScannedAt: 456,
+    };
+
+    (reader as any).metadataCache = new Map([[cached.sessionId, cached]]);
+    (reader as any).scanPromise = new Promise(() => {});
+
+    const result = await reader.listConversations();
+
+    expect(result.total).toBe(1);
+    expect(result.conversations[0]).toEqual(
+      expect.objectContaining({
+        sessionId: 'codex:cached-session',
+        projectPath: '/repo/cached',
+        summary: 'Cached Codex task',
+      }),
+    );
+  });
+
+  it('maps Codex messages and shell tools into ConversationMessage records', async () => {
+    await writeSessionFile(tempDir, '2026/05/06/rollout-2026-05-06T01-02-03-session-abc.jsonl', [
+      sessionMeta({ id: 'session-abc', cwd: '/repo/app', model: 'gpt-5.4', timestamp: '2026-05-06T01:02:03.000Z' }),
+      userMessage('session-abc', 'Run tests', '2026-05-06T01:02:04.000Z'),
+      reasoningEvent('2026-05-06T01:02:05.000Z'),
+      assistantMessage('I will run the test command.', '2026-05-06T01:02:06.000Z'),
+      functionCall('call-1', 'exec_command', { cmd: 'npm test', workdir: '/repo/app' }, '2026-05-06T01:02:07.000Z'),
+      tokenCountEvent({
+        input_tokens: 1200,
+        cached_input_tokens: 400,
+        output_tokens: 70,
+      }, '2026-05-06T01:02:07.500Z', {
+        input_tokens: 300,
+        cached_input_tokens: 100,
+        output_tokens: 20,
+      }),
+      execEnd('call-1', { stdout: 'ok\n', stderr: '', exit_code: 0 }, '2026-05-06T01:02:08.000Z'),
+      functionOutput('call-1', 'ok\n', '2026-05-06T01:02:09.000Z'),
+    ]);
+
+    const messages = await reader.fetchConversation('codex:session-abc');
+
+    expect(messages.map((message) => message.type)).toEqual(['user', 'assistant', 'assistant', 'user']);
+    expect(messages.map((message) => message.model)).toEqual(['gpt-5.4', 'gpt-5.4', 'gpt-5.4', 'gpt-5.4']);
+    expect(messages[0].message).toEqual({ role: 'user', content: 'Run tests' });
+    expect(messages[1].message).toMatchObject({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'I will run the test command.' }],
+    });
+    expect(messages[2].message).toMatchObject({
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'call-1',
+          name: 'Bash',
+          input: { command: 'npm test', cwd: '/repo/app' },
+        },
+      ],
+    });
+    expect(messages[2].usage).toEqual({
+      inputTokens: 200,
+      outputTokens: 20,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 100,
+    });
+    expect(messages[3].message).toMatchObject({
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'call-1',
+          content: 'ok\n',
+          is_error: false,
+        },
+      ],
+    });
+  });
+
+  it('skips synthetic environment context user messages', async () => {
+    await writeSessionFile(tempDir, '2026/05/06/rollout-2026-05-06T01-02-03-session-context.jsonl', [
+      sessionMeta({ id: 'session-context', cwd: '/repo/app', model: 'gpt-5.4', timestamp: '2026-05-06T01:02:03.000Z' }),
+      userMessage('session-context', '<environment_context>\n  <cwd>/repo/app</cwd>\n</environment_context>', '2026-05-06T01:02:04.000Z'),
+      userMessage('session-context', 'Show me Codex sessions', '2026-05-06T01:02:05.000Z'),
+      assistantMessage('Here are the sessions.', '2026-05-06T01:02:06.000Z'),
+    ]);
+
+    const result = await reader.listConversations();
+    const messages = await reader.fetchConversation('codex:session-context');
+
+    expect(result.conversations[0].summary).toBe('Show me Codex sessions');
+    expect(messages).toHaveLength(2);
+    expect(JSON.stringify(messages)).not.toContain('environment_context');
+  });
+
+  it('strips leading launcher instructions from Codex list summaries', async () => {
+    await writeSessionFile(tempDir, '2026/05/06/rollout-2026-05-06T01-02-03-session-important.jsonl', [
+      sessionMeta({ id: 'session-important', cwd: '/repo/app', model: 'gpt-5.4', timestamp: '2026-05-06T01:02:03.000Z' }),
+      userMessage(
+        'session-important',
+        [
+          'IMPORTANT: 不要读取或执行 ~/.claude/ 下的任何文件。只关注仓库代码。',
+          '',
+          '你正在解决 git merge 冲突。',
+          '',
+          '请解决所有冲突。',
+        ].join('\n'),
+        '2026-05-06T01:02:04.000Z',
+      ),
+      assistantMessage('Working on it', '2026-05-06T01:02:05.000Z'),
+    ]);
+
+    const result = await reader.listConversations();
+
+    expect(result.conversations[0].summary).toBe('你正在解决 git merge 冲突。  请解决所有冲突。');
+  });
+
+  it('does not expose encrypted reasoning content as readable message text', async () => {
+    await writeSessionFile(tempDir, '2026/05/06/rollout-2026-05-06T01-02-03-session-private.jsonl', [
+      sessionMeta({ id: 'session-private', cwd: '/repo/app', model: 'gpt-5.4', timestamp: '2026-05-06T01:02:03.000Z' }),
+      userMessage('session-private', 'Question', '2026-05-06T01:02:04.000Z'),
+      reasoningEvent('2026-05-06T01:02:05.000Z'),
+      assistantMessage('Answer', '2026-05-06T01:02:06.000Z'),
+    ]);
+
+    const messages = await reader.fetchConversation('codex:session-private');
+    const serialized = JSON.stringify(messages);
+
+    expect(serialized).not.toContain('sealed-cot');
+    expect(messages).toHaveLength(2);
+  });
+
+  it('maps reasoning summaries when Codex records a readable summary', async () => {
+    await writeSessionFile(tempDir, '2026/05/06/rollout-2026-05-06T01-02-03-session-summary.jsonl', [
+      sessionMeta({ id: 'session-summary', cwd: '/repo/app', model: 'gpt-5.4', timestamp: '2026-05-06T01:02:03.000Z' }),
+      userMessage('session-summary', 'Question', '2026-05-06T01:02:04.000Z'),
+      {
+        timestamp: '2026-05-06T01:02:05.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'reasoning',
+          summary: [{ type: 'summary_text', text: 'Checked repository shape.' }],
+          encrypted_content: 'sealed-cot',
+        },
+      },
+      assistantMessage('Answer', '2026-05-06T01:02:06.000Z'),
+    ]);
+
+    const messages = await reader.fetchConversation('codex:session-summary');
+
+    expect(messages[1].message).toMatchObject({
+      role: 'assistant',
+      content: [{ type: 'thinking', thinking: 'Checked repository shape.' }],
+    });
+    expect(JSON.stringify(messages)).not.toContain('sealed-cot');
+  });
+
+  it('extracts Codex token counts into conversation usage summary', async () => {
+    await writeSessionFile(tempDir, '2026/05/06/rollout-2026-05-06T01-02-03-session-tokens.jsonl', [
+      sessionMeta({ id: 'session-tokens', cwd: '/repo/app', model: 'gpt-5.5', timestamp: '2026-05-06T01:02:03.000Z' }),
+      userMessage('session-tokens', 'Question', '2026-05-06T01:02:04.000Z'),
+      assistantMessage('Answer', '2026-05-06T01:02:05.000Z'),
+      tokenCountEvent({
+        input_tokens: 1000,
+        cached_input_tokens: 250,
+        output_tokens: 80,
+      }, '2026-05-06T01:02:06.000Z'),
+    ]);
+
+    const details = await reader.fetchConversationDetails('session-tokens');
+
+    expect(details.usageSummary).toEqual({
+      total: {
+        inputTokens: 750,
+        outputTokens: 80,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 250,
+      },
+      byModel: [
+        {
+          model: 'gpt-5.5',
+          messageCount: 1,
+          inputTokens: 750,
+          outputTokens: 80,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 250,
+        },
+      ],
+    });
+  });
+});
+
+async function writeSessionFile(homePath: string, relativePath: string, entries: unknown[]): Promise<void> {
+  const filePath = path.join(homePath, 'sessions', relativePath);
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, entries.map((entry) => JSON.stringify(entry)).join('\n'));
+}
+
+function sessionMeta({
+  id,
+  cwd,
+  model,
+  timestamp,
+}: {
+  id: string;
+  cwd: string;
+  model: string;
+  timestamp: string;
+}) {
+  return {
+    timestamp,
+    type: 'session_meta',
+    payload: {
+      id,
+      cwd,
+      model_provider: { model },
+      timestamp,
+      cli_version: '1.0.0',
+    },
+  };
+}
+
+function userMessage(sessionId: string, text: string, timestamp: string) {
+  return {
+    timestamp,
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text }],
+      session_id: sessionId,
+    },
+  };
+}
+
+function assistantMessage(text: string, timestamp: string) {
+  return {
+    timestamp,
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text }],
+      phase: 'commentary',
+    },
+  };
+}
+
+function reasoningEvent(timestamp: string) {
+  return {
+    timestamp,
+    type: 'response_item',
+    payload: {
+      type: 'reasoning',
+      summary: [],
+      encrypted_content: 'sealed-cot',
+    },
+  };
+}
+
+function tokenCountEvent(totalTokenUsage: Record<string, number>, timestamp: string, lastTokenUsage?: Record<string, number>) {
+  return {
+    timestamp,
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: totalTokenUsage,
+        ...(lastTokenUsage ? { last_token_usage: lastTokenUsage } : {}),
+      },
+    },
+  };
+}
+
+function functionCall(callId: string, name: string, args: Record<string, unknown>, timestamp: string) {
+  return {
+    timestamp,
+    type: 'response_item',
+    payload: {
+      type: 'function_call',
+      name,
+      call_id: callId,
+      arguments: JSON.stringify(args),
+    },
+  };
+}
+
+function execEnd(
+  callId: string,
+  output: { stdout: string; stderr: string; exit_code: number },
+  timestamp: string,
+) {
+  return {
+    timestamp,
+    type: 'event_msg',
+    payload: {
+      type: 'exec_command_end',
+      call_id: callId,
+      stdout: output.stdout,
+      stderr: output.stderr,
+      exit_code: output.exit_code,
+      status: output.exit_code === 0 ? 'completed' : 'failed',
+    },
+  };
+}
+
+function functionOutput(callId: string, output: string, timestamp: string) {
+  return {
+    timestamp,
+    type: 'response_item',
+    payload: {
+      type: 'function_call_output',
+      call_id: callId,
+      output,
+    },
+  };
+}

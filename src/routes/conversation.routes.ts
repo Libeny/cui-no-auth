@@ -332,6 +332,10 @@ export function createConversationRoutes(
     });
 
     try {
+      if (sessionId.startsWith('codex:')) {
+        throw new CUIError('CONVERSATION_NOT_FOUND', `Conversation ${sessionId} is a Codex session`, 404);
+      }
+
       const subagents: SubagentSummary[] = await historyReader.listSubagents(sessionId);
       res.json({ subagents });
     } catch (error) {
@@ -355,6 +359,10 @@ export function createConversationRoutes(
     });
 
     try {
+      if (sessionId.startsWith('codex:')) {
+        throw new CUIError('CONVERSATION_NOT_FOUND', `Conversation ${sessionId} is a Codex session`, 404);
+      }
+
       const response: SubagentDetailsResponse = await historyReader.fetchSubagentConversation(sessionId, subagentId);
       res.json(response);
     } catch (error) {
@@ -379,6 +387,10 @@ export function createConversationRoutes(
     });
     
     try {
+      if (sessionId.startsWith('codex:')) {
+        throw new CUIError('CONVERSATION_NOT_FOUND', `Conversation ${sessionId} is a Codex session`, 404);
+      }
+
       // First try to fetch from history
       try {
         const messages = await historyReader.fetchConversation(req.params.sessionId);

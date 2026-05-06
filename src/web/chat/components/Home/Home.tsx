@@ -6,7 +6,7 @@ import { Header } from './Header';
 import { ALL_DIRECTORIES_VALUE, Composer, ComposerRef } from '@/web/chat/components/Composer';
 import { TaskTabs } from './TaskTabs';
 import { TaskList } from './TaskList';
-import type { EnvPreset } from '../../types';
+import type { ConversationSourceFilter, EnvPreset } from '../../types';
 
 export function Home() {
   const navigate = useNavigate();
@@ -23,6 +23,7 @@ export function Home() {
     listRefreshFeedback,
   } = useConversations();
   const [activeTab, setActiveTab] = useState<'tasks' | 'history' | 'archive'>('tasks');
+  const [sourceFilter, setSourceFilter] = useState<ConversationSourceFilter>('all');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedDirectory, setSelectedDirectory] = useState<string | undefined>(ALL_DIRECTORIES_VALUE);
   const [envPresets, setEnvPresets] = useState<EnvPreset[]>([]);
@@ -54,7 +55,7 @@ export function Home() {
   }, []);
 
   // Get filter parameters based on active tab + selected directory
-  const getFiltersForTab = (tab: 'tasks' | 'history' | 'archive', projectPath?: string) => {
+  const getFiltersForTab = (tab: 'tasks' | 'history' | 'archive', projectPath?: string, provider: ConversationSourceFilter = sourceFilter) => {
     const base = (() => {
       switch (tab) {
         case 'tasks':
@@ -67,14 +68,15 @@ export function Home() {
           return {};
       }
     })();
-    return projectPath && projectPath !== ALL_DIRECTORIES_VALUE ? { ...base, projectPath } : base;
+    const withProvider = provider === 'all' ? { ...base, provider } : { ...base, provider };
+    return projectPath && projectPath !== ALL_DIRECTORIES_VALUE ? { ...withProvider, projectPath } : withProvider;
   };
 
   // Auto-refresh on navigation back to Home
   useEffect(() => {
     // Refresh on component mount if we have conversations
     if (conversationCountRef.current > 0) {
-      loadConversations(conversationCountRef.current, getFiltersForTab(activeTab, selectedDirectory));
+      loadConversations(conversationCountRef.current, getFiltersForTab(activeTab, selectedDirectory, sourceFilter));
     }
     
     // Focus the input after a brief delay to ensure DOM is ready
@@ -88,11 +90,11 @@ export function Home() {
 
   // Reload conversations when tab or directory changes
   useEffect(() => {
-    const filters = getFiltersForTab(activeTab, selectedDirectory);
+    const filters = getFiltersForTab(activeTab, selectedDirectory, sourceFilter);
     console.log('[Home] Loading conversations with filters:', filters);
     loadConversations(undefined, filters);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, selectedDirectory]);
+  }, [activeTab, selectedDirectory, sourceFilter]);
 
   const showRefreshNotice = (message: string) => {
     if (refreshNoticeTimerRef.current) {
@@ -258,6 +260,8 @@ export function Home() {
               <TaskTabs 
                 activeTab={activeTab}
                 onTabChange={setActiveTab}
+                sourceFilter={sourceFilter}
+                onSourceFilterChange={setSourceFilter}
               />
             </div>
 
@@ -271,8 +275,8 @@ export function Home() {
               activeTab={activeTab}
               onLoadMore={(filters) => loadMoreConversations(
                 selectedDirectory && selectedDirectory !== ALL_DIRECTORIES_VALUE
-                  ? { ...filters, projectPath: selectedDirectory }
-                  : filters
+                  ? { ...filters, provider: sourceFilter, projectPath: selectedDirectory }
+                  : { ...filters, provider: sourceFilter }
               )}
             />
           </div>

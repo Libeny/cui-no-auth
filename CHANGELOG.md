@@ -1,5 +1,36 @@
 # 更新日志
 
+## v0.7.5 (2026-05-06)
+
+### 新功能
+- **Codex 历史会话浏览**：
+  - 新增 `CodexHistoryReader`，读取 `~/.codex/sessions/**/rollout-*.jsonl`
+  - 新增 `CodexHistoryIndexer`，按 15 秒轮询把 Codex 会话变化广播到首页
+  - 新增 `/api/codex-conversations` 和 `/api/codex-conversations/:sessionId`
+  - Codex session 使用 `codex:` 前缀隔离，避免和 Claude sessionId 冲突
+- **Codex 消息映射**：
+  - 支持 Codex user / assistant message 映射到现有会话消息结构
+  - 支持 reasoning summary、function_call、function_call_output、exec_command_end
+  - 支持 Codex token usage 汇总和单条 assistant 消息用量展示
+- **首页来源过滤**：
+  - 新增 `全部 / Claude Code / Codex` 来源选择
+  - Claude 与 Codex 会话可合并排序、去重和分页
+  - Codex 会话在列表中显示独立来源 badge
+- **Codex 只读详情页**：
+  - Codex 会话可从首页进入详情页查看完整历史
+  - Codex 会话隐藏续聊输入框、归档、置顶和重命名等 Claude 专属操作
+  - 模型标签按 Claude / GPT-Codex / 外部模型分色展示
+
+### 改进
+- Claude 会话列表过滤掉 `codex:` 前缀和空占位 session，避免历史列表混入无效记录
+- Codex JSONL 解析允许忽略尾部坏行，适配仍在写入中的会话文件
+- 新增 Codex reader、indexer、route 和模型配色单元测试
+
+### 注意事项
+- Codex 会话目前是只读历史浏览，不支持从 CUI 中继续 Codex 会话
+- Docker 部署如果需要浏览 Codex 历史，需要额外挂载 `~/.codex:/root/.codex:ro`
+- 本地全量 unit test 依赖 `better-sqlite3` 原生模块，需要确保 `node_modules` 与当前 Node.js ABI 一致
+
 ## v0.7.4 (2026-04-20)
 
 ### 新功能

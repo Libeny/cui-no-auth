@@ -24,6 +24,8 @@ import { geminiService } from './services/gemini-service.js';
 import { asrService } from './services/asr-service.js';
 import { ClaudeRouterService } from './services/claude-router-service.js';
 import { HistoryIndexer } from './services/history-indexer.js';
+import { CodexHistoryReader } from './services/codex/codex-history-reader.js';
+import { CodexHistoryIndexer } from './services/codex/codex-history-indexer.js';
 import { SessionUpdateBus } from './services/session-update-bus.js';
 import { SessionUpdateBroadcaster } from './services/session-update-broadcaster.js';
 import { 
@@ -33,6 +35,7 @@ import {
 } from './types/index.js';
 import { createLogger, type Logger } from './services/logger.js';
 import { createConversationRoutes } from './routes/conversation.routes.js';
+import { createCodexConversationRoutes } from './routes/codex-conversation.routes.js';
 import { createSystemRoutes } from './routes/system.routes.js';
 import { createPermissionRoutes } from './routes/permission.routes.js';
 import { createFileSystemRoutes } from './routes/filesystem.routes.js';
@@ -75,6 +78,8 @@ export class CUIServer {
   private sessionUpdateBus: SessionUpdateBus;
   private sessionUpdateBroadcaster: SessionUpdateBroadcaster;
   private routerService?: ClaudeRouterService;
+  private codexHistoryReader: CodexHistoryReader;
+  private codexHistoryIndexer: CodexHistoryIndexer;
   private logger: Logger;
   private port: number;
   private host: string;
@@ -118,9 +123,12 @@ export class CUIServer {
     this.notificationService = new NotificationService();
     this.webPushService = WebPushService.getInstance();
     this.historyIndexer = new HistoryIndexer(this.sessionInfoService);
+    this.codexHistoryReader = new CodexHistoryReader();
+    this.codexHistoryIndexer = new CodexHistoryIndexer(this.codexHistoryReader);
     this.sessionUpdateBus = new SessionUpdateBus();
     this.sessionUpdateBroadcaster = new SessionUpdateBroadcaster(this.sessionUpdateBus, this.streamManager);
     this.historyIndexer.setSessionUpdateBus(this.sessionUpdateBus);
+    this.codexHistoryIndexer.setSessionUpdateBus(this.sessionUpdateBus);
     
     // Wire up notification service
     this.processManager.setNotificationService(this.notificationService);
@@ -333,6 +341,7 @@ export class CUIServer {
       // Start background tasks
       this.sessionUpdateBroadcaster.start();
       this.historyIndexer.start();
+      this.codexHistoryIndexer.start();
       
     } catch (error) {
       this.logger.error('Failed to start server:', error, {
@@ -367,6 +376,7 @@ export class CUIServer {
 
     this.sessionUpdateBroadcaster.stop();
     this.historyIndexer.stop();
+    this.codexHistoryIndexer.stop();
     
     // Stop accepting new connections
     if (this.server) {
@@ -440,6 +450,7 @@ export class CUIServer {
       // Disconnect streaming clients
       this.sessionUpdateBroadcaster.stop();
       this.historyIndexer.stop();
+      this.codexHistoryIndexer.stop();
       this.streamManager.disconnectAll();
       
       this.logger.info('Cleanup completed');
@@ -509,6 +520,7 @@ export class CUIServer {
       this.toolMetricsService,
       this.configService
     ));
+    this.app.use('/api/codex-conversations', createCodexConversationRoutes(this.codexHistoryReader));
     this.app.use('/api/filesystem', createFileSystemRoutes(this.fileSystemService));
     this.app.use('/api/logs', createLogRoutes());
     this.app.use('/api/stream', createStreamingRoutes(this.streamManager));

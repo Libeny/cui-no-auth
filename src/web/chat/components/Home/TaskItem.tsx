@@ -15,6 +15,7 @@ interface TaskItemProps {
   projectPath: string;
   recentDirectories: Record<string, { lastDate: string; shortname: string }>;
   status: 'ongoing' | 'completed' | 'error' | 'pending';
+  provider?: 'claude' | 'codex';
   streamingId?: string;
   messageCount?: number;
   toolMetrics?: {
@@ -24,6 +25,7 @@ interface TaskItemProps {
     writeCount: number;
   };
   liveStatus?: StreamStatus;
+  routeSessionId?: string;
   isArchived?: boolean;
   isPinned?: boolean;
   isRenaming?: boolean;
@@ -44,9 +46,11 @@ export const TaskItem = memo(function TaskItem({
   projectPath, 
   recentDirectories,
   status,
+  provider = 'claude',
   streamingId,
   messageCount,
   toolMetrics,
+  routeSessionId,
   // liveStatus is deprecated in favor of LiveTaskStatus component
   isArchived = false,
   isPinned = false,
@@ -62,6 +66,13 @@ export const TaskItem = memo(function TaskItem({
 }: TaskItemProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [newName, setNewName] = useState(title);
+  const providerLabel = provider === 'codex' ? 'Codex' : 'Claude Code';
+  const providerBadgeClass = provider === 'codex'
+    ? 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300'
+    : 'border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-300';
+  const displaySessionId = provider === 'codex' && _id.startsWith('codex:')
+    ? _id.slice('codex:'.length, 'codex:'.length + 8)
+    : _id.slice(0, 8);
   const formatTimestamp = (ts: string) => {
     const date = new Date(ts);
     const now = new Date();
@@ -114,7 +125,7 @@ export const TaskItem = memo(function TaskItem({
           e.preventDefault();
           onClick();
         }}
-        href={`/c/${_id}`}
+        href={`/c/${routeSessionId || _id}`}
       >
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-5 w-full px-4 py-3.5 border-b border-border/30 text-sm">
           <div className="flex flex-col gap-0.5">
@@ -165,6 +176,9 @@ export const TaskItem = memo(function TaskItem({
                 </div>
               ) : (
                 <div className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-medium group-hover:text-foreground">
+                  <span className={`mr-2 rounded-sm border px-1.5 py-0.5 align-middle text-[10px] font-semibold tracking-normal ${providerBadgeClass}`}>
+                    {providerLabel}
+                  </span>
                   <span>{title || 'New conversation'}</span>
                 </div>
               )}
@@ -174,9 +188,9 @@ export const TaskItem = memo(function TaskItem({
                 {formatTimestamp(timestamp)}
               </span>
               <span className="text-muted-foreground">·</span>
-              <span className="overflow-hidden text-ellipsis whitespace-nowrap flex items-baseline gap-1" title={`${projectPath} (${_id})`}>
+              <span className="overflow-hidden text-ellipsis whitespace-nowrap flex items-baseline gap-1" title={`${projectPath} (${provider === 'codex' && _id.startsWith('codex:') ? _id.slice('codex:'.length) : _id})`}>
                 <span>{projectPath || 'No project'}</span>
-                <span className="text-muted-foreground/50 text-xs font-mono shrink-0">({_id.slice(0, 8)})</span>
+                <span className="text-muted-foreground/50 text-xs font-mono shrink-0">({displaySessionId})</span>
               </span>
               {messageCount !== undefined && (
                 <>
@@ -222,7 +236,7 @@ export const TaskItem = memo(function TaskItem({
             </div>
           )}
           
-          {status === 'completed' && isHovered && (
+          {status === 'completed' && isHovered && provider !== 'codex' && (
             <div className="flex items-center gap-2">
               <TooltipProvider>
                 <Tooltip>

@@ -1,6 +1,7 @@
 import React from 'react';
 import type { SubagentSummary } from '../../types';
 import { formatFilePath, formatToolInput, extractDomain } from '../../utils/tool-utils';
+import { getModelTextClass } from '../../utils/model-colors';
 
 interface ToolLabelProps {
   toolName: string;
@@ -147,7 +148,7 @@ export function ToolLabel({ toolName, toolInput, workingDirectory, model, subage
       ) : null}
       {model ? (
         <div className="mt-1 text-[11px] text-muted-foreground font-mono">
-          model: {model}
+          model: <span className={`font-semibold ${getModelTextClass(model)}`}>[{model}]</span>
         </div>
       ) : null}
     </div>

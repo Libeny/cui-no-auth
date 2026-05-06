@@ -26,8 +26,12 @@ export interface TokenUsageSummary {
   byModel: TokenUsageByModel[];
 }
 
+export type ConversationProvider = 'claude' | 'codex';
+export type ConversationSourceFilter = 'all' | ConversationProvider;
+
 // Base conversation types
 export interface ConversationSummary {
+  provider?: ConversationProvider;
   sessionId: string; // Claude CLI's actual session ID (used for history files)
   projectPath: string;
   summary: string;
@@ -190,6 +194,7 @@ export interface ConversationListQuery {
   hasContinuation?: boolean;
   archived?: boolean;
   pinned?: boolean;
+  provider?: ConversationSourceFilter;
 }
 
 export interface ConversationDetailsResponse {

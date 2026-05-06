@@ -73,6 +73,8 @@ class ApiService {
     hasContinuation?: boolean;
     archived?: boolean;
     pinned?: boolean;
+    sortBy?: 'created' | 'updated';
+    order?: 'asc' | 'desc';
   }): Promise<{ conversations: ConversationSummary[]; total: number }> {
     const searchParams = new URLSearchParams();
     if (params?.limit) searchParams.append('limit', params.limit.toString());
@@ -81,14 +83,41 @@ class ApiService {
     if (params?.hasContinuation !== undefined) searchParams.append('hasContinuation', params.hasContinuation.toString());
     if (params?.archived !== undefined) searchParams.append('archived', params.archived.toString());
     if (params?.pinned !== undefined) searchParams.append('pinned', params.pinned.toString());
-    searchParams.append('sortBy', 'updated');
-    searchParams.append('order', 'desc');
+    searchParams.append('sortBy', params?.sortBy || 'updated');
+    searchParams.append('order', params?.order || 'desc');
 
     return this.apiCall(`/api/conversations?${searchParams}`);
   }
 
+  async getCodexConversations(params?: {
+    limit?: number;
+    offset?: number;
+    projectPath?: string;
+    hasContinuation?: boolean;
+    archived?: boolean;
+    pinned?: boolean;
+    sortBy?: 'created' | 'updated';
+    order?: 'asc' | 'desc';
+  }): Promise<{ conversations: ConversationSummary[]; total: number }> {
+    const searchParams = new URLSearchParams();
+    if (params?.limit) searchParams.append('limit', params.limit.toString());
+    if (params?.offset) searchParams.append('offset', params.offset.toString());
+    if (params?.projectPath) searchParams.append('projectPath', params.projectPath);
+    if (params?.hasContinuation !== undefined) searchParams.append('hasContinuation', params.hasContinuation.toString());
+    if (params?.archived !== undefined) searchParams.append('archived', params.archived.toString());
+    if (params?.pinned !== undefined) searchParams.append('pinned', params.pinned.toString());
+    searchParams.append('sortBy', params?.sortBy || 'updated');
+    searchParams.append('order', params?.order || 'desc');
+
+    return this.apiCall(`/api/codex-conversations?${searchParams}`);
+  }
+
   async getConversationDetails(sessionId: string): Promise<ConversationDetailsResponse> {
     return this.apiCall(`/api/conversations/${sessionId}`);
+  }
+
+  async getCodexConversationDetails(sessionId: string): Promise<ConversationDetailsResponse> {
+    return this.apiCall(`/api/codex-conversations/${sessionId}`);
   }
 
   async getConversationSubagents(sessionId: string): Promise<{ subagents: SubagentSummary[] }> {

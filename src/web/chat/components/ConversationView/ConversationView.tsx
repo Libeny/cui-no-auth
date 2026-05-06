@@ -5,7 +5,7 @@ import { Composer, ComposerRef } from '@/web/chat/components/Composer';
 import { ConversationHeader } from '../ConversationHeader/ConversationHeader';
 import { api } from '../../services/api';
 import { useStreaming, useConversationMessages } from '../../hooks';
-import type { ChatMessage, ConversationDetailsResponse, ConversationMessage, ConversationSummary, EnvPreset, SubagentSummary } from '../../types';
+import type { ChatMessage, ConversationDetailsResponse, ConversationMessage, ConversationSummary, EnvPreset, SubagentSummary, TokenUsageSummary } from '../../types';
 import { buildTokenUsageSummary } from '@/utils/token-usage';
 
 type RefreshOutcome = 'updated' | 'noop';
@@ -14,6 +14,16 @@ type RefreshFeedback = {
   source: 'auto' | 'manual';
   token: number;
 };
+
+const CODEX_SESSION_PREFIX = 'codex:';
+
+function toCodexSessionId(sessionId: string): string {
+  return sessionId.startsWith(CODEX_SESSION_PREFIX) ? sessionId : `${CODEX_SESSION_PREFIX}${sessionId}`;
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return error instanceof Error && /not found/i.test(error.message);
+}
 
 // Wrapper component to force full remount on session change
 export function ConversationView() {
@@ -38,12 +48,16 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   const [currentWorkingDirectory, setCurrentWorkingDirectory] = useState<string>('');
   const [envPresets, setEnvPresets] = useState<EnvPreset[]>([]);
   const [refreshFeedback, setRefreshFeedback] = useState<RefreshFeedback | null>(null);
+  const [backendUsageSummary, setBackendUsageSummary] = useState<TokenUsageSummary | undefined>(undefined);
   const composerRef = useRef<ComposerRef>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const messageFingerprintRef = useRef<string>('');
   // activeSessionIdRef is no longer strictly needed for race conditions due to key={sessionId}, 
   // but kept for safety in async callbacks
   const activeSessionIdRef = useRef<string | null>(sessionId || null);
+  const providerHint = (location.state as { provider?: string } | null)?.provider === 'codex' || sessionId?.startsWith(CODEX_SESSION_PREFIX) || false;
+  const [resolvedProvider, setResolvedProvider] = useState<'claude' | 'codex' | null>(providerHint ? 'codex' : null);
+  const isCodexSession = resolvedProvider === 'codex' || providerHint;
 
   // Use shared conversation messages hook
   const {
@@ -76,11 +90,11 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   });
 
   const usageSummary = useMemo(() => {
-    return buildTokenUsageSummary([
+    return backendUsageSummary || buildTokenUsageSummary([
       ...messages,
       ...Object.values(childrenMessages).flat(),
     ]);
-  }, [messages, childrenMessages]);
+  }, [messages, childrenMessages, backendUsageSummary]);
 
   useEffect(() => {
     messageFingerprintRef.current = buildMessagesFingerprint(messages);
@@ -127,12 +141,29 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
     }
 
     try {
-      const details = await api.getConversationDetails(sessionId);
+      let provider: 'claude' | 'codex' = isCodexSession ? 'codex' : 'claude';
+      let details: ConversationDetailsResponse;
+
+      try {
+        details = provider === 'codex'
+          ? await api.getCodexConversationDetails(toCodexSessionId(sessionId))
+          : await api.getConversationDetails(sessionId);
+      } catch (detailsError) {
+        if (provider === 'claude' && isNotFoundError(detailsError)) {
+          provider = 'codex';
+          details = await api.getCodexConversationDetails(toCodexSessionId(sessionId));
+        } else {
+          throw detailsError;
+        }
+      }
+
+      setResolvedProvider(provider);
 
       console.log('[ConversationView] API 返回数据:', {
         messagesCount: details.messages?.length,
         totalMessages: details.messages?.length
       });
+      setBackendUsageSummary(details.usageSummary);
 
       const chatMessages = convertToChatlMessages(details);
       const nextFingerprint = buildMessagesFingerprint(chatMessages);
@@ -153,10 +184,13 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
       }
       
       // Check if this conversation has an active stream
-      const conversationsResponse = await api.getConversations({ limit: 100 });
+      const lookupSessionId = provider === 'codex' ? toCodexSessionId(sessionId) : sessionId;
+      const conversationsResponse = provider === 'codex'
+        ? await api.getCodexConversations({ limit: 100 })
+        : await api.getConversations({ limit: 100 });
 
       const currentConversation = conversationsResponse.conversations.find(
-        conv => conv.sessionId === sessionId
+        conv => conv.sessionId === lookupSessionId
       );
       
       if (currentConversation) {
@@ -209,7 +243,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
         }, 100);
       }
     }
-  }, [sessionId, setAllMessages, setPermissionRequest]);
+  }, [sessionId, setAllMessages, setPermissionRequest, isCodexSession]);
 
   // Initial load
   useEffect(() => {
@@ -217,7 +251,10 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   }, [fetchConversation]);
 
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || isCodexSession || resolvedProvider === null) {
+      setSubagents([]);
+      return;
+    }
 
     let cancelled = false;
     api.getConversationSubagents(sessionId)
@@ -235,7 +272,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [sessionId, isCodexSession, resolvedProvider]);
 
   useEffect(() => {
     setSubagentByToolUseId(buildSubagentMap(messages, subagents));
@@ -243,7 +280,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
 
   // Listen for content updates on session-specific stream
   // Only connect AFTER initial load is complete to prevent connection flooding during rapid switching
-  const sessionStreamId = (!isLoading && sessionId) ? `session-${sessionId}` : null;
+  const sessionStreamId = (!isLoading && sessionId && resolvedProvider === 'claude') ? `session-${sessionId}` : null;
   useStreaming(sessionStreamId, {
     onMessage: (event) => {
       if (event.type === 'session_content_update') {
@@ -349,7 +386,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
     <div className="h-full flex flex-col bg-background relative" role="main" aria-label="Conversation view">
       <ConversationHeader 
         title={conversationSummary?.sessionInfo.custom_name || conversationTitle}
-        sessionId={sessionId}
+        sessionId={resolvedProvider === 'claude' ? sessionId : undefined}
         isArchived={conversationSummary?.sessionInfo.archived || false}
         isPinned={conversationSummary?.sessionInfo.pinned || false}
         subtitle={conversationSummary ? {
@@ -428,51 +465,53 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
         refreshFeedback={refreshFeedback}
       />
 
-      <div 
-        className="sticky bottom-0 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm z-10 w-full flex justify-center px-2 pb-6"
-        aria-label="Message composer section"
-      >
-        <div className="w-full max-w-3xl">
-          <Composer
-            ref={composerRef}
-            onSubmit={handleSendMessage}
-            onStop={handleStop}
-            onPermissionDecision={handlePermissionDecision}
-            isLoading={isConnected || isPermissionDecisionLoading}
-            placeholder="Continue the conversation..."
-            permissionRequest={currentPermissionRequest}
-            showPermissionUI={true}
-            showStopButton={true}
-            showModelSelector={true}
-            enableFileAutocomplete={true}
-            dropdownPosition="above"
-            workingDirectory={conversationSummary?.projectPath}
-            envPresets={envPresets}
-            onFetchFileSystem={async (directory) => {
-              try {
-                const response = await api.listDirectory({
-                  path: directory || currentWorkingDirectory,
-                  recursive: true,
-                  respectGitignore: true,
-                });
-                return response.entries;
-              } catch (error) {
-                console.error('Failed to fetch file system entries:', error);
-                return [];
-              }
-            }}
-            onFetchCommands={async (workingDirectory) => {
-              try {
-                const response = await api.getCommands(workingDirectory || currentWorkingDirectory);
-                return response.commands;
-              } catch (error) {
-                console.error('Failed to fetch commands:', error);
-                return [];
-              }
-            }}
-          />
+      {resolvedProvider === 'claude' && (
+        <div
+          className="sticky bottom-0 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm z-10 w-full flex justify-center px-2 pb-6"
+          aria-label="Message composer section"
+        >
+          <div className="w-full max-w-3xl">
+            <Composer
+              ref={composerRef}
+              onSubmit={handleSendMessage}
+              onStop={handleStop}
+              onPermissionDecision={handlePermissionDecision}
+              isLoading={isConnected || isPermissionDecisionLoading}
+              placeholder="Continue the conversation..."
+              permissionRequest={currentPermissionRequest}
+              showPermissionUI={true}
+              showStopButton={true}
+              showModelSelector={true}
+              enableFileAutocomplete={true}
+              dropdownPosition="above"
+              workingDirectory={conversationSummary?.projectPath}
+              envPresets={envPresets}
+              onFetchFileSystem={async (directory) => {
+                try {
+                  const response = await api.listDirectory({
+                    path: directory || currentWorkingDirectory,
+                    recursive: true,
+                    respectGitignore: true,
+                  });
+                  return response.entries;
+                } catch (error) {
+                  console.error('Failed to fetch file system entries:', error);
+                  return [];
+                }
+              }}
+              onFetchCommands={async (workingDirectory) => {
+                try {
+                  const response = await api.getCommands(workingDirectory || currentWorkingDirectory);
+                  return response.commands;
+                } catch (error) {
+                  console.error('Failed to fetch commands:', error);
+                  return [];
+                }
+              }}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
     </div>
   );

@@ -2,7 +2,15 @@ import React, { createContext, useContext, useState, useEffect, ReactNode, useRe
 import { api } from '../services/api';
 import { useStreamStatus } from './StreamStatusContext';
 import { useStreaming } from '../hooks/useStreaming';
-import type { ConversationSummary, WorkingDirectory, ConversationSummaryWithLiveStatus, StreamEvent } from '../types';
+import type { ConversationSourceFilter, ConversationSummary, WorkingDirectory, ConversationSummaryWithLiveStatus, StreamEvent } from '../types';
+
+type ConversationFilters = {
+  hasContinuation?: boolean;
+  archived?: boolean;
+  pinned?: boolean;
+  projectPath?: string;
+  provider?: ConversationSourceFilter;
+};
 
 interface RecentDirectory {
   lastDate: string;
@@ -16,18 +24,8 @@ interface ConversationsContextType {
   hasMore: boolean;
   error: string | null;
   recentDirectories: Record<string, RecentDirectory>;
-  loadConversations: (limit?: number, filters?: {
-    hasContinuation?: boolean;
-    archived?: boolean;
-    pinned?: boolean;
-    projectPath?: string;
-  }, showLoading?: boolean) => Promise<'updated' | 'noop'>;
-  loadMoreConversations: (filters?: {
-    hasContinuation?: boolean;
-    archived?: boolean;
-    pinned?: boolean;
-    projectPath?: string;
-  }) => Promise<void>;
+  loadConversations: (limit?: number, filters?: ConversationFilters, showLoading?: boolean) => Promise<'updated' | 'noop'>;
+  loadMoreConversations: (filters?: ConversationFilters) => Promise<void>;
   getMostRecentWorkingDirectory: () => string | null;
   listRefreshFeedback: {
     outcome: 'updated';
@@ -41,6 +39,124 @@ const ConversationsContext = createContext<ConversationsContextType | undefined>
 const INITIAL_LIMIT = 20;
 const LOAD_MORE_LIMIT = 40;
 const INDEX_UPDATE_THROTTLE_MS = 15000;
+
+function getConversationProvider(conversation: Pick<ConversationSummary, 'sessionId' | 'provider'>): 'claude' | 'codex' {
+  return conversation.provider || (conversation.sessionId.startsWith('codex:') ? 'codex' : 'claude');
+}
+
+function withProvider<T extends ConversationSummary>(conversation: T, fallback?: 'claude' | 'codex'): T {
+  return {
+    ...conversation,
+    provider: conversation.provider || fallback || getConversationProvider(conversation),
+  };
+}
+
+function sortConversationsByUpdated<T extends ConversationSummary>(items: T[]): T[] {
+  return [...items].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+}
+
+function dedupeConversationsBySessionId<T extends ConversationSummary>(items: T[]): T[] {
+  const seen = new Set<string>();
+  const deduped: T[] = [];
+
+  for (const item of items) {
+    if (seen.has(item.sessionId)) continue;
+    seen.add(item.sessionId);
+    deduped.push(item);
+  }
+
+  return deduped;
+}
+
+async function loadConversationPage(
+  limit: number,
+  offset: number,
+  filters: ConversationFilters,
+): Promise<{ conversations: ConversationSummaryWithLiveStatus[]; total: number }> {
+  const { provider = 'all', ...queryFilters } = filters;
+  const baseQuery = {
+    ...queryFilters,
+    sortBy: 'updated' as const,
+    order: 'desc' as const,
+  };
+
+  if (provider === 'claude') {
+    const data = await api.getConversations({ ...baseQuery, limit, offset });
+    return {
+      conversations: data.conversations.map((conversation) => withProvider(conversation, 'claude')),
+      total: data.total,
+    };
+  }
+
+  if (provider === 'codex') {
+    const data = await api.getCodexConversations({ ...baseQuery, limit, offset });
+    return {
+      conversations: data.conversations.map((conversation) => withProvider(conversation, 'codex')),
+      total: data.total,
+    };
+  }
+
+  const mergedLimit = offset + limit;
+  const [claudeData, codexData] = await Promise.all([
+    api.getConversations({ ...baseQuery, limit: mergedLimit, offset: 0 }),
+    api.getCodexConversations({ ...baseQuery, limit: mergedLimit, offset: 0 }),
+  ]);
+  const merged = dedupeConversationsBySessionId(sortConversationsByUpdated([
+    ...claudeData.conversations.map((conversation) => withProvider(conversation, 'claude')),
+    ...codexData.conversations.map((conversation) => withProvider(conversation, 'codex')),
+  ]));
+
+  return {
+    conversations: merged.slice(offset, offset + limit),
+    total: claudeData.total + codexData.total,
+  };
+}
+
+function conversationMatchesFilters(conversation: ConversationSummary, filters: ConversationFilters): boolean {
+  const provider = getConversationProvider(conversation);
+  if (filters.provider && filters.provider !== 'all' && provider !== filters.provider) return false;
+  if (filters.projectPath && conversation.projectPath !== filters.projectPath) return false;
+  if (filters.archived !== undefined && Boolean(conversation.sessionInfo.archived) !== filters.archived) return false;
+  if (filters.pinned !== undefined && Boolean(conversation.sessionInfo.pinned) !== filters.pinned) return false;
+  if (filters.hasContinuation !== undefined && Boolean(conversation.sessionInfo.continuation_session_id) !== filters.hasContinuation) return false;
+  return true;
+}
+
+function conversationFromUpdate(sessionId: string, metadata: any): ConversationSummaryWithLiveStatus {
+  const provider = metadata?.provider || (sessionId.startsWith('codex:') ? 'codex' : 'claude');
+  const createdAt = metadata.createdAt || new Date().toISOString();
+  const updatedAt = metadata.updatedAt || createdAt;
+
+  return {
+    ...metadata,
+    provider,
+    sessionId,
+    projectPath: metadata.projectPath || metadata.sessionInfo?.project_path || '',
+    summary: metadata.summary || metadata.sessionInfo?.summary || 'No summary available',
+    sessionInfo: metadata.sessionInfo || {
+      custom_name: '',
+      created_at: createdAt,
+      updated_at: updatedAt,
+      version: provider === 'codex' ? 1 : 3,
+      pinned: false,
+      archived: false,
+      continuation_session_id: '',
+      initial_commit_head: '',
+      permission_mode: 'default',
+      summary: metadata.summary,
+      project_path: metadata.projectPath,
+      message_count: metadata.messageCount,
+      model: metadata.model,
+      sessionId,
+    },
+    createdAt,
+    updatedAt,
+    messageCount: metadata.messageCount || 0,
+    totalDuration: metadata.totalDuration || 0,
+    model: metadata.model || 'Unknown',
+    status: metadata.status || 'completed',
+  };
+}
 
 export function ConversationsProvider({ children }: { children: ReactNode }) {
   const [conversations, setConversations] = useState<ConversationSummaryWithLiveStatus[]>([]);
@@ -61,12 +177,7 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
   useEffect(() => { conversationsRef.current = conversations; }, [conversations]);
 
   // Track active filters so ALL refresh paths (SSE, archive, pin, etc.) reuse them
-  const activeFiltersRef = useRef<{
-    hasContinuation?: boolean;
-    archived?: boolean;
-    pinned?: boolean;
-    projectPath?: string;
-  }>({});
+  const activeFiltersRef = useRef<ConversationFilters>({});
   const lastIndexRefreshAtRef = useRef(0);
   const pendingIndexRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -119,15 +230,10 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
 
   const buildListFingerprint = (items: ConversationSummaryWithLiveStatus[]) =>
     items
-      .map((item) => `${item.sessionId}:${item.updatedAt}:${item.summary}:${item.status}`)
+      .map((item) => `${getConversationProvider(item)}:${item.sessionId}:${item.updatedAt}:${item.summary}:${item.status}`)
       .join('|');
 
-  const loadConversations = async (limit?: number, filters?: {
-    hasContinuation?: boolean;
-    archived?: boolean;
-    pinned?: boolean;
-    projectPath?: string;
-  }, showLoading: boolean = true): Promise<'updated' | 'noop'> => {
+  const loadConversations = async (limit?: number, filters?: ConversationFilters, showLoading: boolean = true): Promise<'updated' | 'noop'> => {
     // When filters are explicitly provided, persist them as active filters.
     // When filters are undefined (e.g. from TaskList archive/pin/rename),
     // reuse the last active filters to preserve projectPath filtering.
@@ -146,23 +252,18 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
       const previousFingerprint = buildListFingerprint(conversationsRef.current);
       // Load working directories from API in parallel with conversations
       const [data, apiDirectories] = await Promise.all([
-        api.getConversations({ 
-          limit: loadLimit,
-          offset: 0,
-          sortBy: 'updated',
-          order: 'desc',
-          ...effectiveFilters
-        }),
+        loadConversationPage(loadLimit, 0, effectiveFilters),
         loadWorkingDirectories()
       ]);
       
-      setConversations(data.conversations);
-      updateRecentDirectories(data.conversations, apiDirectories);
-      setHasMore(data.conversations.length === loadLimit);
-      const nextFingerprint = buildListFingerprint(data.conversations);
+      const nextConversations = dedupeConversationsBySessionId(data.conversations);
+      setConversations(nextConversations);
+      updateRecentDirectories(nextConversations, apiDirectories);
+      setHasMore(nextConversations.length < data.total);
+      const nextFingerprint = buildListFingerprint(nextConversations);
       
       // Subscribe to streams for ongoing conversations
-      const ongoingStreamIds = data.conversations
+      const ongoingStreamIds = nextConversations
         .filter(conv => conv.status === 'ongoing' && conv.streamingId)
         .map(conv => conv.streamingId as string);
       
@@ -179,12 +280,7 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const loadMoreConversations = async (filters?: {
-    hasContinuation?: boolean;
-    archived?: boolean;
-    pinned?: boolean;
-    projectPath?: string;
-  }) => {
+  const loadMoreConversations = async (filters?: ConversationFilters) => {
     if (loadingMore || !hasMore) return;
 
     // Use provided filters or fall back to active filters (preserves projectPath)
@@ -193,13 +289,8 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
     setLoadingMore(true);
     setError(null);
     try {
-      const data = await api.getConversations({
-        limit: LOAD_MORE_LIMIT,
-        offset: conversations.length,
-        sortBy: 'updated',
-        order: 'desc',
-        ...effectiveFilters
-      });
+      const offset = conversationsRef.current.length;
+      const data = await loadConversationPage(LOAD_MORE_LIMIT, offset, effectiveFilters);
       
       if (data.conversations.length === 0) {
         setHasMore(false);
@@ -208,11 +299,11 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
           // Create a set of existing session IDs to avoid duplicates
           const existingIds = new Set(prev.map(conv => conv.sessionId));
           const newConversations = data.conversations.filter(conv => !existingIds.has(conv.sessionId));
-          return [...prev, ...newConversations];
+          return dedupeConversationsBySessionId(sortConversationsByUpdated([...prev, ...newConversations]));
         });
         // When loading more, we don't need to fetch API directories again
-        updateRecentDirectories([...conversations, ...data.conversations]);
-        setHasMore(data.conversations.length === LOAD_MORE_LIMIT);
+        updateRecentDirectories([...conversationsRef.current, ...data.conversations]);
+        setHasMore(offset + data.conversations.length < data.total);
         
         // Subscribe to streams for any new ongoing conversations
         const newOngoingStreamIds = data.conversations
@@ -266,107 +357,76 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
   };
 
   const applySessionListUpdate = (sessionId: string, eventType: 'created' | 'modified', metadata: any) => {
+    const nextConversation = conversationFromUpdate(sessionId, metadata);
+    const matchesActiveFilters = conversationMatchesFilters(nextConversation, activeFiltersRef.current);
+
     setConversations(prev => {
       const existingIndex = prev.findIndex(c => c.sessionId === sessionId);
 
+      if (!matchesActiveFilters) {
+        return existingIndex >= 0 ? prev.filter((_, index) => index !== existingIndex) : prev;
+      }
+
       if (eventType === 'created') {
         if (existingIndex === -1) {
-          const newSession = {
-            ...metadata,
-            sessionInfo: metadata.sessionInfo || {
-              custom_name: '',
-              created_at: metadata.createdAt || new Date().toISOString(),
-              updated_at: metadata.updatedAt || new Date().toISOString(),
-              version: 3,
-              pinned: false,
-              archived: false,
-              continuation_session_id: '',
-              initial_commit_head: '',
-              permission_mode: 'default',
-              summary: metadata.summary,
-              project_path: metadata.projectPath,
-              message_count: metadata.messageCount,
-              model: metadata.model,
-              sessionId: metadata.sessionId,
-            },
-          };
-          return [newSession, ...prev];
+          return sortConversationsByUpdated([nextConversation, ...prev]);
         }
         return prev;
       }
 
       if (existingIndex >= 0) {
         const oldUpdatedAt = new Date(prev[existingIndex].updatedAt).getTime();
-        const newUpdatedAt = new Date(metadata.updatedAt).getTime();
+        const newUpdatedAt = new Date(nextConversation.updatedAt).getTime();
 
         if (newUpdatedAt > oldUpdatedAt) {
           const updatedSession = {
             ...prev[existingIndex],
-            ...metadata,
+            ...nextConversation,
             sessionInfo: {
               ...prev[existingIndex].sessionInfo,
-              ...(metadata.sessionInfo || {}),
-              updated_at: metadata.updatedAt,
-              message_count: metadata.messageCount,
-              summary: metadata.summary || prev[existingIndex].sessionInfo.summary,
-              project_path: metadata.projectPath || prev[existingIndex].sessionInfo.project_path,
-              model: metadata.model || prev[existingIndex].sessionInfo.model,
+              ...(nextConversation.sessionInfo || {}),
+              updated_at: nextConversation.updatedAt,
+              message_count: nextConversation.messageCount,
+              summary: nextConversation.summary || prev[existingIndex].sessionInfo.summary,
+              project_path: nextConversation.projectPath || prev[existingIndex].sessionInfo.project_path,
+              model: nextConversation.model || prev[existingIndex].sessionInfo.model,
             },
           };
           const newList = prev.filter((_, i) => i !== existingIndex);
-          return [updatedSession, ...newList];
+          return sortConversationsByUpdated([updatedSession, ...newList]);
         }
 
         const updated = [...prev];
         updated[existingIndex] = {
           ...updated[existingIndex],
-          ...metadata,
+          ...nextConversation,
           sessionInfo: {
             ...updated[existingIndex].sessionInfo,
-            ...(metadata.sessionInfo || {}),
-            message_count: metadata.messageCount,
-            summary: metadata.summary || updated[existingIndex].sessionInfo.summary,
+            ...(nextConversation.sessionInfo || {}),
+            message_count: nextConversation.messageCount,
+            summary: nextConversation.summary || updated[existingIndex].sessionInfo.summary,
           },
         };
         return updated;
       }
 
-      if (prev.length > 0 && new Date(metadata.updatedAt) > new Date(prev[0].updatedAt)) {
-        const newSession = {
-          ...metadata,
-          sessionInfo: metadata.sessionInfo || {
-            custom_name: '',
-            created_at: metadata.createdAt || new Date().toISOString(),
-            updated_at: metadata.updatedAt || new Date().toISOString(),
-            version: 3,
-            pinned: false,
-            archived: false,
-            continuation_session_id: '',
-            initial_commit_head: '',
-            permission_mode: 'default',
-            summary: metadata.summary,
-            project_path: metadata.projectPath,
-            message_count: metadata.messageCount,
-            model: metadata.model,
-            sessionId: metadata.sessionId,
-          },
-        };
-        return [newSession, ...prev];
+      if (prev.length === 0 || new Date(nextConversation.updatedAt) > new Date(prev[0].updatedAt)) {
+        return sortConversationsByUpdated([nextConversation, ...prev]);
       }
 
       return prev;
     });
 
-    if (metadata.projectPath) {
+    if (nextConversation.projectPath) {
       setRecentDirectories(prev => {
-        const pathParts = metadata.projectPath.split('/');
-        const shortname = pathParts[pathParts.length - 1] || metadata.projectPath;
+        const pathParts = nextConversation.projectPath.split('/');
+        const shortname = pathParts[pathParts.length - 1] || nextConversation.projectPath;
 
         return {
           ...prev,
-          [metadata.projectPath]: {
-            lastDate: metadata.updatedAt,
-            shortname: prev[metadata.projectPath]?.shortname || shortname,
+          [nextConversation.projectPath]: {
+            lastDate: nextConversation.updatedAt,
+            shortname: prev[nextConversation.projectPath]?.shortname || shortname,
           },
         };
       });
