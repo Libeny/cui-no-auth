@@ -45,7 +45,7 @@ CUI Server 是一个为 Claude Code 与 Codex 设计的 **Web 化实时监控平
 
 ## 核心特性
 
-### 🚀 监控与浏览体验（v0.7.5）
+### 🚀 监控与浏览体验（v0.7.6）
 
 #### 0. Claude + Codex 会话统一浏览
 
@@ -144,7 +144,7 @@ Layer 3: SSE Broadcaster
 | 详情更新 | N/A | ≤ 15 秒（历史会话） | **自动** |
 | 内存占用 | ~50MB | ~60MB | 持平 |
 
-### 🌐 v0.7.5 新增
+### 🌐 v0.7.6 新增
 
 - **Codex 历史会话浏览**：
   - 后端新增 Codex JSONL reader / mapper / indexer
