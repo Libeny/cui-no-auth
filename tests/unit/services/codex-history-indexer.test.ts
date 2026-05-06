@@ -12,6 +12,12 @@ vi.mock('@/services/logger.js', () => ({
 }));
 
 describe('CodexHistoryIndexer', () => {
+  it('defaults to a 30 second polling interval', () => {
+    const indexer = new CodexHistoryIndexer({ listMetadata: vi.fn() } as any);
+
+    expect((indexer as any).intervalMs).toBe(30000);
+  });
+
   it('publishes created and modified events based on file state', async () => {
     const reader = {
       listMetadata: vi.fn()

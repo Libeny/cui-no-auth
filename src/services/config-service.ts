@@ -330,6 +330,12 @@ export class ConfigService {
     if (server.port !== undefined && typeof server.port !== 'number') {
       throw new Error('Invalid config: server.port must be a number');
     }
+    if (
+      server.historyPollIntervalSeconds !== undefined &&
+      (!Number.isFinite(server.historyPollIntervalSeconds) || server.historyPollIntervalSeconds <= 0)
+    ) {
+      throw new Error('Invalid config: server.historyPollIntervalSeconds must be a positive number');
+    }
   }
 
   private assertInterfaceConfig(iface: Partial<InterfaceConfig>): void {

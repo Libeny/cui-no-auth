@@ -5,6 +5,7 @@ export interface CLIConfig {
   host?: string;
   token?: string;
   skipAuthToken?: boolean;
+  historyPollIntervalSeconds?: number;
 }
 
 /**
@@ -55,10 +56,26 @@ export function parseArgs(argv: string[]): CLIConfig {
       case '--skip-auth-token':
         config.skipAuthToken = true;
         break;
+
+      case '--history-poll-interval':
+      case '--history-poll-interval-seconds':
+        if (i + 1 < args.length) {
+          const intervalSeconds = Number(args[++i]);
+          if (Number.isFinite(intervalSeconds) && intervalSeconds > 0) {
+            config.historyPollIntervalSeconds = intervalSeconds;
+          } else {
+            logger.error(`Invalid history poll interval value: ${args[i]}`);
+            process.exit(1);
+          }
+        } else {
+          logger.error(`${arg} requires a value`);
+          process.exit(1);
+        }
+        break;
         
       default:
         logger.error(`Unknown argument: ${arg}`);
-        logger.info('Usage: cui-server [--port <number>] [--host <string>] [--token <string>] [--skip-auth-token]');
+        logger.info('Usage: cui-server [--port <number>] [--host <string>] [--token <string>] [--skip-auth-token] [--history-poll-interval-seconds <seconds>]');
         process.exit(1);
     }
   }

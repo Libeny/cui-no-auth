@@ -54,6 +54,14 @@ import { authMiddleware, createAuthMiddleware } from './middleware/auth.js';
 // ViteExpress will be imported dynamically in initialize() if needed
 let ViteExpress: typeof import('vite-express') | undefined;
 
+interface CUIServerOverrides {
+  port?: number;
+  host?: string;
+  token?: string;
+  skipAuthToken?: boolean;
+  historyPollIntervalSeconds?: number;
+}
+
 /**
  * Main CUI server class
  */
@@ -83,9 +91,10 @@ export class CUIServer {
   private logger: Logger;
   private port: number;
   private host: string;
-  private configOverrides?: { port?: number; host?: string; token?: string; skipAuthToken?: boolean };
+  private historyPollIntervalMs: number;
+  private configOverrides?: CUIServerOverrides;
 
-  constructor(configOverrides?: { port?: number; host?: string; token?: string; skipAuthToken?: boolean }) {
+  constructor(configOverrides?: CUIServerOverrides) {
     this.app = express();
     this.configOverrides = configOverrides;
     
@@ -100,6 +109,7 @@ export class CUIServer {
     // Will be set after config is loaded
     this.port = 0;
     this.host = '';
+    this.historyPollIntervalMs = 30000;
     
     this.logger.debug('Initializing CUIServer', {
       nodeEnv: process.env.NODE_ENV,
@@ -196,11 +206,15 @@ export class CUIServer {
       // Apply overrides if provided (for tests and CLI options)
       this.port = this.configOverrides?.port ?? config.server.port;
       this.host = this.configOverrides?.host ?? config.server.host;
+      this.historyPollIntervalMs = this.resolveHistoryPollIntervalMs(config.server.historyPollIntervalSeconds);
+      this.historyIndexer.setPollIntervalMs(this.historyPollIntervalMs);
+      this.codexHistoryIndexer.setPollIntervalMs(this.historyPollIntervalMs);
       
       this.logger.info('Configuration loaded', {
         machineId: config.machine_id,
         port: this.port,
         host: this.host,
+        historyPollIntervalSeconds: this.historyPollIntervalMs / 1000,
         overrides: this.configOverrides ? Object.keys(this.configOverrides) : []
       });
 
@@ -246,6 +260,9 @@ export class CUIServer {
       // Subscribe to configuration changes to hot-reload router when needed
       this.configService.onChange(async (newConfig) => {
         try {
+          this.historyPollIntervalMs = this.resolveHistoryPollIntervalMs(newConfig.server.historyPollIntervalSeconds);
+          this.historyIndexer.setPollIntervalMs(this.historyPollIntervalMs);
+          this.codexHistoryIndexer.setPollIntervalMs(this.historyPollIntervalMs);
           await this.initializeOrReloadRouter(newConfig);
         } catch (error) {
           this.logger.error('Failed to reload router after config change', error);
@@ -263,6 +280,11 @@ export class CUIServer {
         throw new CUIError('SERVER_INIT_FAILED', `Server initialization failed: ${error}`, 500);
       }
     }
+  }
+
+  private resolveHistoryPollIntervalMs(configIntervalSeconds?: number): number {
+    const seconds = this.configOverrides?.historyPollIntervalSeconds ?? configIntervalSeconds ?? 30;
+    return Math.max(1, seconds) * 1000;
   }
 
   /**

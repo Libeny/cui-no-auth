@@ -17,7 +17,7 @@ interface CodexHistoryIndexerOptions {
 
 export class CodexHistoryIndexer {
   private readonly reader: Pick<CodexHistoryReader, 'listMetadata'>;
-  private readonly intervalMs: number;
+  private intervalMs: number;
   private readonly logger: Logger;
   private sessionUpdateBus?: SessionUpdateBus;
   private pollTimer?: NodeJS.Timeout;
@@ -27,12 +27,22 @@ export class CodexHistoryIndexer {
 
   constructor(reader: Pick<CodexHistoryReader, 'listMetadata'>, options: CodexHistoryIndexerOptions = {}) {
     this.reader = reader;
-    this.intervalMs = options.intervalMs ?? 15000;
+    this.intervalMs = options.intervalMs ?? 30000;
     this.logger = createLogger('CodexHistoryIndexer');
   }
 
   setSessionUpdateBus(sessionUpdateBus: SessionUpdateBus): void {
     this.sessionUpdateBus = sessionUpdateBus;
+  }
+
+  setPollIntervalMs(intervalMs: number): void {
+    this.intervalMs = intervalMs;
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = setInterval(() => {
+        void this.runScanCycle();
+      }, this.intervalMs);
+    }
   }
 
   async start(): Promise<void> {

@@ -14,6 +14,11 @@ export interface EnvPreset {
 export interface ServerConfig {
   host: string;
   port: number;
+  /**
+   * Background history polling interval in seconds.
+   * Applies to Claude and Codex history discovery/update checks.
+   */
+  historyPollIntervalSeconds?: number;
 }
 
 export interface GeminiConfig {
@@ -127,7 +132,8 @@ export interface CUIConfig {
 export const DEFAULT_CONFIG: Omit<CUIConfig, 'machine_id' | 'authToken'> = {
   server: {
     host: 'localhost',
-    port: 3001
+    port: 3001,
+    historyPollIntervalSeconds: 30
   },
   interface: {
     colorScheme: 'system',

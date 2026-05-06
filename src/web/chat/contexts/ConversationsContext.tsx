@@ -38,7 +38,7 @@ const ConversationsContext = createContext<ConversationsContextType | undefined>
 
 const INITIAL_LIMIT = 20;
 const LOAD_MORE_LIMIT = 40;
-const INDEX_UPDATE_THROTTLE_MS = 15000;
+const INDEX_UPDATE_THROTTLE_MS = 30000;
 
 function getConversationProvider(conversation: Pick<ConversationSummary, 'sessionId' | 'provider'>): 'claude' | 'codex' {
   return conversation.provider || (conversation.sessionId.startsWith('codex:') ? 'codex' : 'claude');

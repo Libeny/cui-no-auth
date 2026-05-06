@@ -56,7 +56,6 @@ type HistoryEntry = {
 };
 
 export class HistoryIndexer {
-  private static readonly POLL_INTERVAL_MS = 15000;
   private logger: Logger;
   private claudeHomePath: string;
   private sessionInfoService: SessionInfoService;
@@ -65,15 +64,26 @@ export class HistoryIndexer {
   private shouldStop: boolean = false;
   private pollTimer?: NodeJS.Timeout;
   private isScanInProgress = false;
+  private pollIntervalMs: number;
 
-  constructor(sessionInfoService?: SessionInfoService) {
+  constructor(sessionInfoService?: SessionInfoService, options: { intervalMs?: number } = {}) {
     this.logger = createLogger('HistoryIndexer');
     this.claudeHomePath = path.join(os.homedir(), '.claude');
     this.sessionInfoService = sessionInfoService || SessionInfoService.getInstance();
+    this.pollIntervalMs = options.intervalMs ?? 30000;
   }
 
   setSessionUpdateBus(sessionUpdateBus: SessionUpdateBus): void {
     this.sessionUpdateBus = sessionUpdateBus;
+  }
+
+  setPollIntervalMs(intervalMs: number): void {
+    this.pollIntervalMs = intervalMs;
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = undefined;
+      this.startPolling();
+    }
   }
 
   async start(): Promise<void> {
@@ -119,12 +129,12 @@ export class HistoryIndexer {
     }
 
     this.logger.info(`Starting history polling on ${projectsDir}`, {
-      intervalMs: HistoryIndexer.POLL_INTERVAL_MS,
+      intervalMs: this.pollIntervalMs,
     });
 
     this.pollTimer = setInterval(() => {
       void this.runScanCycle();
-    }, HistoryIndexer.POLL_INTERVAL_MS);
+    }, this.pollIntervalMs);
   }
 
   private async runScanCycle(): Promise<void> {

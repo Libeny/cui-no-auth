@@ -1,5 +1,12 @@
 # 更新日志
 
+## v0.7.8 (2026-05-07)
+
+### 改进
+- 新增历史会话检查间隔配置：`server.historyPollIntervalSeconds`
+- 新增 CLI 参数：`--history-poll-interval-seconds <seconds>`，默认 30 秒，可按需设置为 15、60 或更大
+- 将 Claude / Codex 历史会话兜底轮询和首页 index update 默认节流调整为 30 秒，降低大历史目录下的后台扫描频率
+
 ## v0.7.7 (2026-05-07)
 
 ### 改进

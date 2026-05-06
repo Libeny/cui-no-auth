@@ -65,4 +65,14 @@ describe('Server Command Line Arguments', () => {
     // configOverrides should be set
     expect(serverAny.configOverrides).toEqual({ port: 3002, host: '0.0.0.0' });
   });
+
+  it('should use overridden history poll interval when provided', async () => {
+    const server = new CUIServer({ historyPollIntervalSeconds: 60 });
+
+    // Access private fields for testing
+    const serverAny = server as any;
+
+    // configOverrides should be set
+    expect(serverAny.configOverrides).toEqual({ historyPollIntervalSeconds: 60 });
+  });
 });
