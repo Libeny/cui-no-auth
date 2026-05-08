@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useCallback, useMemo, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { RefreshCw, MessageSquareText } from 'lucide-react';
 import { MessageItem } from './MessageItem';
-import type { ChatMessage, ToolResult, SubagentSummary } from '../../types';
+import type { ChatMessage, ToolResult, SubagentSummary, BackgroundTaskSummary } from '../../types';
 import { buildConversationTurnOutline, type ConversationTurnOutlineItem } from '../../utils/usage-aggregation';
 import {
   Popover,
@@ -15,6 +15,7 @@ export interface MessageListProps {
   toolResults?: Record<string, ToolResult>;
   childrenMessages?: Record<string, ChatMessage[]>;
   subagentByToolUseId?: Record<string, SubagentSummary>;
+  backgroundTaskByToolUseId?: Record<string, BackgroundTaskSummary>;
   expandedTasks?: Set<string>;
   onToggleTaskExpanded?: (toolUseId: string) => void;
   isLoading?: boolean;
@@ -39,6 +40,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   toolResults = {},
   childrenMessages = {},
   subagentByToolUseId = {},
+  backgroundTaskByToolUseId = {},
   expandedTasks = new Set(),
   onToggleTaskExpanded,
   isLoading,
@@ -580,6 +582,7 @@ export const MessageList: React.FC<MessageListProps> = ({
                   toolResults={toolResults}
                   childrenMessages={childrenMessages}
                   subagentByToolUseId={subagentByToolUseId}
+                  backgroundTaskByToolUseId={backgroundTaskByToolUseId}
                   expandedTasks={expandedTasks}
                   onToggleTaskExpanded={onToggleTaskExpanded}
                   onJumpToMessage={scrollToMessage}

@@ -431,6 +431,253 @@ describe('ClaudeHistoryReader', () => {
     });
   });
 
+  describe('background tasks', () => {
+    let tmpClaudeTaskRoot: string;
+
+    afterEach(async () => {
+      if (tmpClaudeTaskRoot) {
+        await fs.rm(tmpClaudeTaskRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('should restore background task status from launch, notification, and TaskOutput records', async () => {
+      const sessionId = 'background-session';
+      const projectDir = path.join(tempDir, 'projects', '-Users-username-background');
+      await fs.mkdir(projectDir, { recursive: true });
+      const sessionFile = path.join(projectDir, `${sessionId}.jsonl`);
+      const outputPath = `/private/tmp/claude-501/-Users-username-background/${sessionId}/tasks/b123.output`;
+
+      const entries = [
+        {
+          type: 'assistant',
+          sessionId,
+          uuid: 'assistant-launch',
+          timestamp: '2026-05-08T01:00:00.000Z',
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'toolu_bash',
+                name: 'Bash',
+                input: {
+                  description: 'Codex Task 1',
+                  command: 'npm test',
+                  run_in_background: true,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          sessionId,
+          uuid: 'launch-result',
+          timestamp: '2026-05-08T01:00:01.000Z',
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_bash',
+                content: `Command running in background with ID: b123. Output is being written to: ${outputPath}`,
+                is_error: false,
+              },
+            ],
+          },
+          toolUseResult: {
+            backgroundTaskId: 'b123',
+          },
+        },
+        {
+          type: 'assistant',
+          sessionId,
+          uuid: 'assistant-output',
+          timestamp: '2026-05-08T01:00:02.000Z',
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'toolu_output',
+                name: 'TaskOutput',
+                input: {
+                  task_id: 'b123',
+                  block: false,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          sessionId,
+          uuid: 'output-result',
+          timestamp: '2026-05-08T01:00:03.000Z',
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_output',
+                content: '<retrieval_status>not_ready</retrieval_status>\n<task_id>b123</task_id>\n<task_type>local_bash</task_type>\n<status>running</status>',
+                is_error: false,
+              },
+            ],
+          },
+        },
+        {
+          type: 'queue-operation',
+          operation: 'enqueue',
+          sessionId,
+          timestamp: '2026-05-08T01:00:04.000Z',
+          content: `<task-notification>
+<task-id>b123</task-id>
+<tool-use-id>toolu_bash</tool-use-id>
+<output-file>${outputPath}</output-file>
+<status>completed</status>
+<summary>Background command "Codex Task 1" completed (exit code 0)</summary>
+</task-notification>`,
+        },
+      ];
+
+      await fs.writeFile(sessionFile, entries.map((entry) => JSON.stringify(entry)).join('\n'));
+
+      reader = new ClaudeHistoryReader();
+      (reader as any).claudeHomePath = tempDir;
+
+      const tasks = await (reader as any).listBackgroundTasks(sessionId);
+
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]).toMatchObject({
+        taskId: 'b123',
+        sessionId,
+        status: 'completed',
+        description: 'Codex Task 1',
+        summary: 'Background command "Codex Task 1" completed (exit code 0)',
+        outputFile: outputPath,
+        outputFileExists: false,
+        launchToolUseId: 'toolu_bash',
+        taskOutputToolUseIds: ['toolu_output'],
+        taskType: 'local_bash',
+        exitCode: 0,
+      });
+    });
+
+    it('should read live output by matching task_id.output under any claude tmp directory', async () => {
+      const sessionId = 'live-output-session';
+      const taskId = 'b456';
+      const projectDir = path.join(tempDir, 'projects', '-Users-username-live-output');
+      await fs.mkdir(projectDir, { recursive: true });
+      const sessionFile = path.join(projectDir, `${sessionId}.jsonl`);
+      const staleOutputPath = `/private/tmp/claude-501/-Users-username-live-output/${sessionId}/tasks/${taskId}.output`;
+
+      tmpClaudeTaskRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-1001-'));
+      const liveTaskDir = path.join(tmpClaudeTaskRoot, '-Users-username-live-output', sessionId, 'tasks');
+      await fs.mkdir(liveTaskDir, { recursive: true });
+      await fs.writeFile(path.join(liveTaskDir, `${taskId}.output`), 'live line 1\nlive line 2\n');
+
+      const entries = [
+        {
+          type: 'user',
+          sessionId,
+          uuid: 'launch-result',
+          timestamp: '2026-05-08T01:00:01.000Z',
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_bash',
+                content: `Command running in background with ID: ${taskId}. Output is being written to: ${staleOutputPath}`,
+                is_error: false,
+              },
+            ],
+          },
+        },
+      ];
+
+      await fs.writeFile(sessionFile, entries.map((entry) => JSON.stringify(entry)).join('\n'));
+
+      reader = new ClaudeHistoryReader();
+      (reader as any).claudeHomePath = tempDir;
+
+      const details = await (reader as any).fetchBackgroundTask(sessionId, taskId);
+
+      expect(details.outputSource).toBe('file');
+      expect(details.output).toBe('live line 1\nlive line 2\n');
+      expect(details.task.outputFile).toContain(`${taskId}.output`);
+      expect(details.task.outputFileExists).toBe(true);
+      expect(details.task.status).toBe('running');
+    });
+
+    it('should fall back to persisted TaskOutput output when the output file is missing', async () => {
+      const sessionId = 'snapshot-session';
+      const taskId = 'b789';
+      const projectDir = path.join(tempDir, 'projects', '-Users-username-snapshot');
+      await fs.mkdir(projectDir, { recursive: true });
+      const sessionFile = path.join(projectDir, `${sessionId}.jsonl`);
+
+      const entries = [
+        {
+          type: 'assistant',
+          sessionId,
+          uuid: 'assistant-output',
+          timestamp: '2026-05-08T01:00:02.000Z',
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'toolu_output',
+                name: 'TaskOutput',
+                input: {
+                  task_id: taskId,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          sessionId,
+          uuid: 'output-result',
+          timestamp: '2026-05-08T01:00:03.000Z',
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_output',
+                content: `<retrieval_status>success</retrieval_status>
+<task_id>${taskId}</task_id>
+<task_type>local_bash</task_type>
+<status>completed</status>
+<exit_code>0</exit_code>
+<output>
+snapshot output
+</output>`,
+                is_error: false,
+              },
+            ],
+          },
+        },
+      ];
+
+      await fs.writeFile(sessionFile, entries.map((entry) => JSON.stringify(entry)).join('\n'));
+
+      reader = new ClaudeHistoryReader();
+      (reader as any).claudeHomePath = tempDir;
+
+      const details = await (reader as any).fetchBackgroundTask(sessionId, taskId);
+
+      expect(details.outputSource).toBe('snapshot');
+      expect(details.output).toBe('snapshot output');
+      expect(details.task.outputFileExists).toBe(false);
+      expect(details.task.status).toBe('completed');
+    });
+  });
+
   describe('fetchConversation', () => {
     it('should throw error if conversation not found', async () => {
       reader = new ClaudeHistoryReader();

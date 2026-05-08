@@ -5,6 +5,8 @@ import type {
   ConversationDetailsResponse,
   SubagentSummary,
   SubagentDetailsResponse,
+  BackgroundTaskSummary,
+  BackgroundTaskDetailsResponse,
   ApiError,
   WorkingDirectoriesResponse,
   PermissionRequest,
@@ -126,6 +128,14 @@ class ApiService {
 
   async getSubagentDetails(sessionId: string, subagentId: string): Promise<SubagentDetailsResponse> {
     return this.apiCall(`/api/conversations/${sessionId}/subagents/${subagentId}`);
+  }
+
+  async getConversationBackgroundTasks(sessionId: string): Promise<{ tasks: BackgroundTaskSummary[] }> {
+    return this.apiCall(`/api/conversations/${sessionId}/background-tasks`);
+  }
+
+  async getBackgroundTaskDetails(sessionId: string, taskId: string): Promise<BackgroundTaskDetailsResponse> {
+    return this.apiCall(`/api/conversations/${sessionId}/background-tasks/${taskId}`);
   }
 
   async startConversation(request: StartConversationRequest): Promise<StartConversationResponse> {

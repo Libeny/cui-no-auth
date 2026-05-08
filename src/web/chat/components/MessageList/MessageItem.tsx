@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import { JsonViewer } from '../JsonViewer/JsonViewer';
 import { ToolUseRenderer } from '../ToolRendering/ToolUseRenderer';
 import { CodeHighlight } from '../CodeHighlight';
-import type { ChatMessage, ToolResult, SubagentSummary } from '../../types';
+import type { ChatMessage, ToolResult, SubagentSummary, BackgroundTaskSummary } from '../../types';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
 import { formatMessageUsage } from '../../utils/token-format';
 import { getModelTextClass } from '../../utils/model-colors';
@@ -14,6 +14,7 @@ interface MessageItemProps {
   toolResults?: Record<string, ToolResult>;
   childrenMessages?: Record<string, ChatMessage[]>;
   subagentByToolUseId?: Record<string, SubagentSummary>;
+  backgroundTaskByToolUseId?: Record<string, BackgroundTaskSummary>;
   expandedTasks?: Set<string>;
   onToggleTaskExpanded?: (toolUseId: string) => void;
   onJumpToMessage?: (messageId: string) => void;
@@ -83,6 +84,7 @@ export const MessageItem = React.memo(function MessageItem({
   toolResults = {}, 
   childrenMessages = {}, 
   subagentByToolUseId = {},
+  backgroundTaskByToolUseId = {},
   expandedTasks = new Set(), 
   onToggleTaskExpanded,
   onJumpToMessage,
@@ -281,6 +283,7 @@ export const MessageItem = React.memo(function MessageItem({
                     workingDirectory={message.workingDirectory}
                     childrenMessages={childrenMessages}
                     subagent={subagentByToolUseId[block.id]}
+                    backgroundTask={backgroundTaskByToolUseId[block.id]}
                     expandedTasks={expandedTasks}
                     onToggleTaskExpanded={onToggleTaskExpanded}
                   />

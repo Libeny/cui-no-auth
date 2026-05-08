@@ -10,6 +10,9 @@ import {
   CUIError,
   SubagentSummary,
   SubagentDetailsResponse,
+  BackgroundTaskSummary,
+  BackgroundTaskDetailsResponse,
+  BackgroundTaskStatus,
   SessionInfo,
 } from '@/types/index.js';
 import { createLogger, type Logger } from './logger.js';
@@ -32,11 +35,40 @@ type RawJsonEntry = {
   isSidechain?: boolean;
   userType?: string;
   version?: string;
+  content?: string;
+  operation?: string;
+  attachment?: {
+    type?: string;
+    prompt?: string;
+    commandMode?: string;
+  };
+  toolUseResult?: unknown;
+  sourceToolAssistantUUID?: string;
   summary?: string;
   leafUuid?: string;
 };
 
 type IndexedSessionInfo = SessionInfo & { sessionId: string };
+type OutputFileStats = {
+  path: string;
+  size: number;
+  updatedAt: string;
+};
+
+type BackgroundOutputRead = {
+  output: string;
+  truncated: boolean;
+};
+
+type MutableBackgroundTask = Omit<BackgroundTaskSummary, 'taskOutputToolUseIds'> & {
+  taskOutputToolUseIds: Set<string>;
+  outputFileCandidates: Set<string>;
+  outputSnapshot?: string;
+  lastRetrievalStatus?: string;
+};
+
+const MAX_BACKGROUND_OUTPUT_BYTES = 256 * 1024;
+const BACKGROUND_OUTPUT_PREVIEW_CHARS = 1200;
 
 /**
  * Reads conversation history from Claude's local storage
@@ -234,6 +266,51 @@ export class ClaudeHistoryReader {
     };
   }
 
+  async listBackgroundTasks(sessionId: string): Promise<BackgroundTaskSummary[]> {
+    const { tasks } = await this.collectBackgroundTasks(sessionId);
+    return tasks
+      .map((task) => this.toBackgroundTaskSummary(task))
+      .sort((a, b) => {
+        const aTime = new Date(a.createdAt || a.updatedAt || 0).getTime();
+        const bTime = new Date(b.createdAt || b.updatedAt || 0).getTime();
+        return aTime - bTime;
+      });
+  }
+
+  async fetchBackgroundTask(sessionId: string, taskId: string): Promise<BackgroundTaskDetailsResponse> {
+    const { taskMap } = await this.collectBackgroundTasks(sessionId);
+    const task = taskMap.get(taskId);
+
+    if (!task) {
+      throw new CUIError('BACKGROUND_TASK_NOT_FOUND', `Background task ${taskId} not found`, 404);
+    }
+
+    let output: string | undefined;
+    let outputTruncated = false;
+    let outputSource: BackgroundTaskDetailsResponse['outputSource'] = 'none';
+
+    if (task.outputFile && task.outputFileExists) {
+      const read = await this.readBackgroundOutputFile(task.outputFile);
+      if (read) {
+        output = read.output;
+        outputTruncated = read.truncated;
+        outputSource = 'file';
+      }
+    }
+
+    if (outputSource === 'none' && task.outputSnapshot !== undefined) {
+      output = task.outputSnapshot;
+      outputSource = 'snapshot';
+    }
+
+    return {
+      task: this.toBackgroundTaskSummary(task),
+      output,
+      outputSource,
+      outputTruncated,
+    };
+  }
+
   /**
    * Get conversation metadata
    */
@@ -294,23 +371,36 @@ export class ClaudeHistoryReader {
     const sessionDir = path.dirname(sessionFilePath);
     const candidates = new Set<string>();
 
-    const nestedDir = path.join(sessionDir, 'subagents');
-    try {
-      const nestedEntries = await fs.readdir(nestedDir);
-      nestedEntries
-        .filter((entry) => entry.startsWith('agent-') && entry.endsWith('.jsonl'))
-        .forEach((entry) => candidates.add(path.join(nestedDir, entry)));
-    } catch {
-      // ignore
+    const candidateDirs = [
+      path.join(sessionDir, path.basename(sessionId), 'subagents'),
+      path.join(sessionDir, 'subagents'),
+    ];
+
+    for (const candidateDir of candidateDirs) {
+      try {
+        const nestedEntries = await fs.readdir(candidateDir);
+        nestedEntries
+          .filter((entry) => entry.startsWith('agent-') && entry.endsWith('.jsonl'))
+          .forEach((entry) => candidates.add(path.join(candidateDir, entry)));
+      } catch {
+        // ignore
+      }
     }
 
-    try {
-      const siblingEntries = await fs.readdir(sessionDir);
-      siblingEntries
-        .filter((entry) => entry.startsWith('agent-') && entry.endsWith('.jsonl'))
-        .forEach((entry) => candidates.add(path.join(sessionDir, entry)));
-    } catch {
-      // ignore
+    const siblingDirs = [
+      path.join(sessionDir, path.basename(sessionId)),
+      sessionDir,
+    ];
+
+    for (const siblingDir of siblingDirs) {
+      try {
+        const siblingEntries = await fs.readdir(siblingDir);
+        siblingEntries
+          .filter((entry) => entry.startsWith('agent-') && entry.endsWith('.jsonl'))
+          .forEach((entry) => candidates.add(path.join(siblingDir, entry)));
+      } catch {
+        // ignore
+      }
     }
 
     const matches: string[] = [];
@@ -331,6 +421,518 @@ export class ClaudeHistoryReader {
   private async subagentFileBelongsToSession(filePath: string, sessionId: string): Promise<boolean> {
     const entries = await this.parseJsonlFile(filePath);
     return entries.some((entry) => entry.sessionId === sessionId);
+  }
+
+  private async collectBackgroundTasks(sessionId: string): Promise<{
+    tasks: MutableBackgroundTask[];
+    taskMap: Map<string, MutableBackgroundTask>;
+  }> {
+    const sessionFilePath = await this.locateMainSessionFile(sessionId);
+    if (!sessionFilePath) {
+      throw new CUIError('CONVERSATION_NOT_FOUND', `Conversation ${sessionId} not found`, 404);
+    }
+
+    const entries = await this.parseJsonlFile(sessionFilePath);
+    const taskMap = new Map<string, MutableBackgroundTask>();
+    const descriptionByToolUseId = new Map<string, string>();
+
+    for (const entry of entries) {
+      if (entry.sessionId && entry.sessionId !== sessionId) continue;
+
+      for (const toolUse of this.extractToolUseBlocks(entry)) {
+        const toolUseId = this.getString(toolUse.id);
+        const toolName = this.getString(toolUse.name);
+        const input = this.asRecord(toolUse.input);
+        const description = this.getString(input?.description);
+
+        if (toolUseId && description) {
+          descriptionByToolUseId.set(toolUseId, description);
+          for (const task of taskMap.values()) {
+            if (task.launchToolUseId === toolUseId && !task.description) {
+              task.description = description;
+            }
+          }
+        }
+
+        if (toolName === 'TaskOutput') {
+          const taskId = this.getString(input?.task_id) || this.getString(input?.taskId);
+          if (taskId && toolUseId) {
+            const task = this.ensureBackgroundTask(taskMap, sessionId, taskId);
+            task.taskOutputToolUseIds.add(toolUseId);
+            this.updateBackgroundTaskTimestamp(task, entry.timestamp);
+          }
+        }
+      }
+
+      for (const payload of this.extractEntryTextPayloads(entry)) {
+        this.applyBackgroundLaunchPayload(taskMap, sessionId, payload.text, payload.toolUseId, entry.timestamp, descriptionByToolUseId);
+        this.applyTaskOutputPayload(taskMap, sessionId, payload.text, entry.timestamp);
+        this.applyTaskNotificationPayload(taskMap, sessionId, payload.text, entry.timestamp, descriptionByToolUseId);
+      }
+
+      this.applyStructuredToolUseResult(taskMap, sessionId, entry, descriptionByToolUseId);
+    }
+
+    for (const task of taskMap.values()) {
+      const resolvedOutputFile = await this.resolveBackgroundOutputFile(task.taskId, [...task.outputFileCandidates]);
+      if (resolvedOutputFile) {
+        task.outputFile = resolvedOutputFile.path;
+        task.outputFileExists = true;
+        task.outputFileSize = resolvedOutputFile.size;
+        task.outputFileUpdatedAt = resolvedOutputFile.updatedAt;
+        if (task.status === 'unknown') {
+          task.status = 'running';
+        }
+      } else {
+        task.outputFileExists = false;
+      }
+
+      if (!task.outputPreview && task.outputSnapshot) {
+        task.outputPreview = this.truncatePreview(task.outputSnapshot);
+      }
+    }
+
+    return {
+      tasks: [...taskMap.values()],
+      taskMap,
+    };
+  }
+
+  private ensureBackgroundTask(
+    taskMap: Map<string, MutableBackgroundTask>,
+    sessionId: string,
+    taskId: string,
+  ): MutableBackgroundTask {
+    const existing = taskMap.get(taskId);
+    if (existing) {
+      return existing;
+    }
+
+    const task: MutableBackgroundTask = {
+      taskId,
+      sessionId,
+      status: 'unknown',
+      outputFileExists: false,
+      taskOutputToolUseIds: new Set<string>(),
+      outputFileCandidates: new Set<string>(),
+    };
+    taskMap.set(taskId, task);
+    return task;
+  }
+
+  private applyBackgroundLaunchPayload(
+    taskMap: Map<string, MutableBackgroundTask>,
+    sessionId: string,
+    text: string,
+    toolUseId: string | undefined,
+    timestamp: string | undefined,
+    descriptionByToolUseId: Map<string, string>,
+  ): void {
+    const match = text.match(/Command running in background with ID:\s*([A-Za-z0-9_-]+)\.\s*Output is being written to:\s*([^\r\n]+?\.output)/);
+    if (!match) return;
+
+    const [, taskId, outputFile] = match;
+    const task = this.ensureBackgroundTask(taskMap, sessionId, taskId);
+    task.status = 'running';
+    task.outputFile = outputFile.trim();
+    task.outputFileCandidates.add(outputFile.trim());
+    if (toolUseId) {
+      task.launchToolUseId = toolUseId;
+      task.description = task.description || descriptionByToolUseId.get(toolUseId);
+    }
+    this.updateBackgroundTaskTimestamp(task, timestamp);
+  }
+
+  private applyTaskOutputPayload(
+    taskMap: Map<string, MutableBackgroundTask>,
+    sessionId: string,
+    text: string,
+    timestamp: string | undefined,
+  ): void {
+    const taskId = this.extractXmlTag(text, 'task_id') || this.extractXmlTag(text, 'task-id');
+    if (!taskId) return;
+
+    const task = this.ensureBackgroundTask(taskMap, sessionId, taskId);
+    const taskType = this.extractXmlTag(text, 'task_type') || this.extractXmlTag(text, 'task-type');
+    const rawStatus = this.extractXmlTag(text, 'status');
+    const retrievalStatus = this.extractXmlTag(text, 'retrieval_status') || this.extractXmlTag(text, 'retrieval-status');
+    const exitCode = this.parseExitCode(this.extractXmlTag(text, 'exit_code') || this.extractXmlTag(text, 'exit-code'));
+    const output = this.extractXmlTag(text, 'output');
+
+    if (taskType) {
+      task.taskType = taskType;
+    }
+    if (retrievalStatus) {
+      task.lastRetrievalStatus = retrievalStatus;
+    }
+    if (exitCode !== undefined) {
+      task.exitCode = exitCode;
+    }
+    if (rawStatus) {
+      task.status = this.normalizeBackgroundTaskStatus(rawStatus, task.exitCode);
+      if (task.status === 'completed' || task.status === 'failed') {
+        task.completedAt = timestamp;
+      }
+    }
+    if (output !== undefined) {
+      task.outputSnapshot = this.trimOuterNewline(output);
+      task.outputPreview = this.truncatePreview(task.outputSnapshot);
+    }
+
+    this.updateBackgroundTaskTimestamp(task, timestamp);
+  }
+
+  private applyTaskNotificationPayload(
+    taskMap: Map<string, MutableBackgroundTask>,
+    sessionId: string,
+    text: string,
+    timestamp: string | undefined,
+    descriptionByToolUseId: Map<string, string>,
+  ): void {
+    const taskId = this.extractXmlTag(text, 'task-id');
+    if (!taskId) return;
+
+    const task = this.ensureBackgroundTask(taskMap, sessionId, taskId);
+    const toolUseId = this.extractXmlTag(text, 'tool-use-id');
+    const outputFile = this.extractXmlTag(text, 'output-file');
+    const rawStatus = this.extractXmlTag(text, 'status');
+    const summary = this.extractXmlTag(text, 'summary');
+    const exitCode = this.extractExitCodeFromSummary(summary);
+
+    if (toolUseId) {
+      task.launchToolUseId = toolUseId;
+      task.description = task.description || descriptionByToolUseId.get(toolUseId);
+    }
+    if (outputFile) {
+      task.outputFile = outputFile;
+      task.outputFileCandidates.add(outputFile);
+    }
+    if (summary) {
+      task.summary = summary;
+      task.description = task.description || this.extractDescriptionFromSummary(summary);
+    }
+    if (exitCode !== undefined) {
+      task.exitCode = exitCode;
+    }
+    if (rawStatus) {
+      task.status = this.normalizeBackgroundTaskStatus(rawStatus, task.exitCode);
+      if (task.status === 'completed' || task.status === 'failed') {
+        task.completedAt = timestamp;
+      }
+    }
+
+    this.updateBackgroundTaskTimestamp(task, timestamp);
+  }
+
+  private applyStructuredToolUseResult(
+    taskMap: Map<string, MutableBackgroundTask>,
+    sessionId: string,
+    entry: RawJsonEntry,
+    descriptionByToolUseId: Map<string, string>,
+  ): void {
+    const result = this.asRecord(entry.toolUseResult);
+    if (!result) return;
+
+    const backgroundTaskId = this.getString(result.backgroundTaskId);
+    if (backgroundTaskId) {
+      const task = this.ensureBackgroundTask(taskMap, sessionId, backgroundTaskId);
+      task.status = task.status === 'unknown' ? 'running' : task.status;
+      this.updateBackgroundTaskTimestamp(task, entry.timestamp);
+    }
+
+    const taskResult = this.asRecord(result.task);
+    const taskId = this.getString(taskResult?.task_id) || this.getString(taskResult?.taskId);
+    if (!taskId) return;
+
+    const task = this.ensureBackgroundTask(taskMap, sessionId, taskId);
+    const taskType = this.getString(taskResult?.task_type) || this.getString(taskResult?.taskType);
+    const description = this.getString(taskResult?.description);
+    const rawStatus = this.getString(taskResult?.status);
+    const exitCode = this.parseExitCode(taskResult?.exitCode ?? taskResult?.exit_code);
+    const output = this.getString(taskResult?.output);
+
+    if (taskType) {
+      task.taskType = taskType;
+    }
+    if (description) {
+      task.description = description;
+      if (task.launchToolUseId) {
+        descriptionByToolUseId.set(task.launchToolUseId, description);
+      }
+    }
+    if (exitCode !== undefined) {
+      task.exitCode = exitCode;
+    }
+    if (rawStatus) {
+      task.status = this.normalizeBackgroundTaskStatus(rawStatus, task.exitCode);
+      if (task.status === 'completed' || task.status === 'failed') {
+        task.completedAt = entry.timestamp;
+      }
+    }
+    if (output !== undefined) {
+      task.outputSnapshot = output;
+      task.outputPreview = this.truncatePreview(output);
+    }
+
+    this.updateBackgroundTaskTimestamp(task, entry.timestamp);
+  }
+
+  private extractToolUseBlocks(entry: RawJsonEntry): any[] {
+    const content = this.getMessageContent(entry);
+    if (!Array.isArray(content)) return [];
+    return content.filter((block: any) => block?.type === 'tool_use');
+  }
+
+  private extractEntryTextPayloads(entry: RawJsonEntry): Array<{ text: string; toolUseId?: string }> {
+    const payloads: Array<{ text: string; toolUseId?: string }> = [];
+    const content = this.getMessageContent(entry);
+
+    if (typeof content === 'string') {
+      payloads.push({ text: content });
+    } else if (Array.isArray(content)) {
+      for (const block of content as any[]) {
+        const toolUseId = this.getString(block?.tool_use_id);
+        if (typeof block?.content === 'string') {
+          payloads.push({ text: block.content, toolUseId });
+        } else if (Array.isArray(block?.content)) {
+          for (const child of block.content) {
+            const text = this.getString(child?.text) || this.getString(child?.content);
+            if (text) {
+              payloads.push({ text, toolUseId });
+            }
+          }
+        }
+
+        const blockText = this.getString(block?.text);
+        if (blockText) {
+          payloads.push({ text: blockText, toolUseId });
+        }
+      }
+    }
+
+    if (entry.content) {
+      payloads.push({ text: entry.content });
+    }
+    if (entry.attachment?.prompt) {
+      payloads.push({ text: entry.attachment.prompt });
+    }
+
+    return payloads;
+  }
+
+  private getMessageContent(entry: RawJsonEntry): unknown {
+    const message = entry.message;
+    if (!message || typeof message !== 'object' || !('content' in message)) {
+      return undefined;
+    }
+    return message.content;
+  }
+
+  private toBackgroundTaskSummary(task: MutableBackgroundTask): BackgroundTaskSummary {
+    return {
+      taskId: task.taskId,
+      sessionId: task.sessionId,
+      status: task.status,
+      outputFile: task.outputFile,
+      outputFileExists: task.outputFileExists,
+      outputFileSize: task.outputFileSize,
+      outputFileUpdatedAt: task.outputFileUpdatedAt,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      completedAt: task.completedAt,
+      taskType: task.taskType,
+      exitCode: task.exitCode,
+      description: task.description,
+      summary: task.summary,
+      launchToolUseId: task.launchToolUseId,
+      taskOutputToolUseIds: [...task.taskOutputToolUseIds],
+      outputPreview: task.outputPreview,
+    };
+  }
+
+  private updateBackgroundTaskTimestamp(task: MutableBackgroundTask, timestamp: string | undefined): void {
+    if (!timestamp) return;
+    if (!task.createdAt || new Date(timestamp).getTime() < new Date(task.createdAt).getTime()) {
+      task.createdAt = timestamp;
+    }
+    if (!task.updatedAt || new Date(timestamp).getTime() > new Date(task.updatedAt).getTime()) {
+      task.updatedAt = timestamp;
+    }
+  }
+
+  private normalizeBackgroundTaskStatus(status: string | undefined, exitCode?: number): BackgroundTaskStatus {
+    const normalized = status?.trim().toLowerCase();
+    if (!normalized) return 'unknown';
+    if (normalized === 'running' || normalized === 'not_ready' || normalized === 'pending') {
+      return 'running';
+    }
+    if (normalized === 'completed' || normalized === 'success') {
+      return exitCode !== undefined && exitCode !== 0 ? 'failed' : 'completed';
+    }
+    if (normalized === 'failed' || normalized === 'error' || normalized === 'cancelled' || normalized === 'canceled') {
+      return 'failed';
+    }
+    return 'unknown';
+  }
+
+  private async resolveBackgroundOutputFile(taskId: string, candidates: string[]): Promise<OutputFileStats | null> {
+    const fileName = `${taskId}.output`;
+
+    for (const candidate of candidates) {
+      if (path.basename(candidate) !== fileName) continue;
+      const stats = await this.statOutputFile(candidate);
+      if (stats) {
+        return stats;
+      }
+    }
+
+    const roots = [...new Set([os.tmpdir(), '/private/tmp', '/tmp'].map((root) => path.resolve(root)))];
+    for (const root of roots) {
+      const found = await this.findClaudeOutputFile(root, fileName);
+      if (found) {
+        const stats = await this.statOutputFile(found);
+        if (stats) {
+          return stats;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private async findClaudeOutputFile(root: string, fileName: string): Promise<string | null> {
+    try {
+      const entries = await fs.readdir(root, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !entry.name.startsWith('claude-')) continue;
+        const found = await this.findFileByName(path.join(root, entry.name), fileName, 5);
+        if (found) {
+          return found;
+        }
+      }
+    } catch {
+      return null;
+    }
+
+    return null;
+  }
+
+  private async findFileByName(directory: string, fileName: string, depthRemaining: number): Promise<string | null> {
+    if (depthRemaining < 0) return null;
+
+    try {
+      const entries = await fs.readdir(directory, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name === fileName) {
+          return path.join(directory, entry.name);
+        }
+      }
+
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const found = await this.findFileByName(path.join(directory, entry.name), fileName, depthRemaining - 1);
+        if (found) {
+          return found;
+        }
+      }
+    } catch {
+      return null;
+    }
+
+    return null;
+  }
+
+  private async statOutputFile(filePath: string): Promise<OutputFileStats | null> {
+    try {
+      const stats = await fs.stat(filePath);
+      if (!stats.isFile()) {
+        return null;
+      }
+
+      return {
+        path: filePath,
+        size: stats.size,
+        updatedAt: stats.mtime.toISOString(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async readBackgroundOutputFile(filePath: string): Promise<BackgroundOutputRead | null> {
+    try {
+      const stats = await fs.stat(filePath);
+      if (!stats.isFile()) {
+        return null;
+      }
+
+      if (stats.size <= MAX_BACKGROUND_OUTPUT_BYTES) {
+        return {
+          output: await fs.readFile(filePath, 'utf-8'),
+          truncated: false,
+        };
+      }
+
+      const fileHandle = await fs.open(filePath, 'r');
+      try {
+        const buffer = Buffer.alloc(MAX_BACKGROUND_OUTPUT_BYTES);
+        await fileHandle.read(buffer, 0, MAX_BACKGROUND_OUTPUT_BYTES, stats.size - MAX_BACKGROUND_OUTPUT_BYTES);
+        return {
+          output: buffer.toString('utf-8'),
+          truncated: true,
+        };
+      } finally {
+        await fileHandle.close();
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  private extractXmlTag(text: string, tagName: string): string | undefined {
+    const escapedTag = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = text.match(new RegExp(`<${escapedTag}>\\s*([\\s\\S]*?)\\s*</${escapedTag}>`, 'i'));
+    return match ? match[1] : undefined;
+  }
+
+  private parseExitCode(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+    const parsed = Number.parseInt(value.trim(), 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  private extractExitCodeFromSummary(summary: string | undefined): number | undefined {
+    if (!summary) return undefined;
+    const match = summary.match(/exit code\s+(-?\d+)/i);
+    return match ? this.parseExitCode(match[1]) : undefined;
+  }
+
+  private extractDescriptionFromSummary(summary: string): string | undefined {
+    const match = summary.match(/Background command "([^"]+)"/);
+    return match?.[1];
+  }
+
+  private trimOuterNewline(value: string): string {
+    return value.replace(/^\n/, '').replace(/\n$/, '');
+  }
+
+  private truncatePreview(value: string): string {
+    return value.length > BACKGROUND_OUTPUT_PREVIEW_CHARS
+      ? `${value.slice(0, BACKGROUND_OUTPUT_PREVIEW_CHARS)}...`
+      : value;
+  }
+
+  private asRecord(value: unknown): Record<string, any> | undefined {
+    return value && typeof value === 'object' ? value as Record<string, any> : undefined;
+  }
+
+  private getString(value: unknown): string | undefined {
+    return typeof value === 'string' && value.trim() ? value : undefined;
   }
   
   /**

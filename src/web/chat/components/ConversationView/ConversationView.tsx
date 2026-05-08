@@ -5,7 +5,7 @@ import { Composer, ComposerRef } from '@/web/chat/components/Composer';
 import { ConversationHeader } from '../ConversationHeader/ConversationHeader';
 import { api } from '../../services/api';
 import { useStreaming, useConversationMessages } from '../../hooks';
-import type { ChatMessage, ConversationDetailsResponse, ConversationMessage, ConversationSummary, EnvPreset, SubagentSummary, TokenUsageSummary } from '../../types';
+import type { BackgroundTaskSummary, ChatMessage, ConversationDetailsResponse, ConversationMessage, ConversationSummary, EnvPreset, SubagentSummary, TokenUsageSummary } from '../../types';
 import { annotateMessagesWithUsagePresentation, buildUniqueTokenUsageSummary } from '../../utils/usage-aggregation';
 
 type RefreshOutcome = 'updated' | 'noop';
@@ -45,6 +45,8 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   const [conversationSummary, setConversationSummary] = useState<ConversationSummary | null>(null);
   const [subagents, setSubagents] = useState<SubagentSummary[]>([]);
   const [subagentByToolUseId, setSubagentByToolUseId] = useState<Record<string, SubagentSummary>>({});
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskSummary[]>([]);
+  const [backgroundTaskByToolUseId, setBackgroundTaskByToolUseId] = useState<Record<string, BackgroundTaskSummary>>({});
   const [currentWorkingDirectory, setCurrentWorkingDirectory] = useState<string>('');
   const [envPresets, setEnvPresets] = useState<EnvPreset[]>([]);
   const [refreshFeedback, setRefreshFeedback] = useState<RefreshFeedback | null>(null);
@@ -158,6 +160,21 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
       }
 
       setResolvedProvider(provider);
+      if (provider === 'claude') {
+        void api.getConversationBackgroundTasks(sessionId)
+          .then((response) => {
+            if (activeSessionIdRef.current === sessionId) {
+              setBackgroundTasks(response.tasks || []);
+            }
+          })
+          .catch(() => {
+            if (activeSessionIdRef.current === sessionId) {
+              setBackgroundTasks([]);
+            }
+          });
+      } else {
+        setBackgroundTasks([]);
+      }
 
       console.log('[ConversationView] API 返回数据:', {
         messagesCount: details.messages?.length,
@@ -277,6 +294,10 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   useEffect(() => {
     setSubagentByToolUseId(buildSubagentMap(messages, subagents));
   }, [messages, subagents]);
+
+  useEffect(() => {
+    setBackgroundTaskByToolUseId(buildBackgroundTaskMap(backgroundTasks));
+  }, [backgroundTasks]);
 
   // Listen for content updates on session-specific stream
   // Only connect AFTER initial load is complete to prevent connection flooding during rapid switching
@@ -457,6 +478,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
         toolResults={toolResults}
         childrenMessages={childrenMessages}
         subagentByToolUseId={subagentByToolUseId}
+        backgroundTaskByToolUseId={backgroundTaskByToolUseId}
         expandedTasks={expandedTasks}
         onToggleTaskExpanded={toggleTaskExpanded}
         isLoading={isLoading}
@@ -586,6 +608,21 @@ function buildSubagentMap(messages: ChatMessage[], subagents: SubagentSummary[])
       mapping[toolUseId] = subagent;
     }
   });
+  return mapping;
+}
+
+function buildBackgroundTaskMap(backgroundTasks: BackgroundTaskSummary[]): Record<string, BackgroundTaskSummary> {
+  const mapping: Record<string, BackgroundTaskSummary> = {};
+
+  for (const task of backgroundTasks) {
+    if (task.launchToolUseId) {
+      mapping[task.launchToolUseId] = task;
+    }
+    for (const toolUseId of task.taskOutputToolUseIds || []) {
+      mapping[toolUseId] = task;
+    }
+  }
+
   return mapping;
 }
 

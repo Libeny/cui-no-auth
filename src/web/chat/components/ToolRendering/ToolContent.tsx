@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { CornerDownRight } from 'lucide-react';
+import { Activity, CornerDownRight } from 'lucide-react';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
-import type { ChatMessage, ToolResult, SubagentSummary } from '../../types';
+import type { ChatMessage, ToolResult, SubagentSummary, BackgroundTaskSummary } from '../../types';
 import { ReadTool } from './tools/ReadTool';
 import { EditTool } from './tools/EditTool';
 import { WriteTool } from './tools/WriteTool';
@@ -23,6 +23,7 @@ interface ToolContentProps {
   childrenMessages?: Record<string, ChatMessage[]>;
   toolResults?: Record<string, any>;
   subagent?: SubagentSummary;
+  backgroundTask?: BackgroundTaskSummary;
 }
 
 export function ToolContent({ 
@@ -33,7 +34,8 @@ export function ToolContent({
   toolUseId, 
   childrenMessages, 
   toolResults,
-  subagent
+  subagent,
+  backgroundTask
 }: ToolContentProps) {
   const [isErrorExpanded, setIsErrorExpanded] = useState(false);
   // Extract result content - handle both string and ContentBlockParam[] formats
@@ -57,6 +59,7 @@ export function ToolContent({
   const resultContent = getResultContent();
   const isError = toolResult?.is_error === true;
   const isPending = toolResult?.status === 'pending';
+  const backgroundTaskLink = backgroundTask ? <BackgroundTaskLink task={backgroundTask} /> : null;
 
   // Skip rendering for pending tools
   if (isPending && toolName !== 'Agent') {
@@ -123,10 +126,13 @@ export function ToolContent({
     
     case 'Bash':
       return (
-        <BashTool
-          input={toolInput}
-          result={resultContent}
-        />
+        <>
+          <BashTool
+            input={toolInput}
+            result={resultContent}
+          />
+          {backgroundTaskLink}
+        </>
       );
     
     case 'Grep':
@@ -171,6 +177,18 @@ export function ToolContent({
         />
       );
 
+    case 'TaskOutput':
+      return (
+        <>
+          <FallbackTool
+            toolName={toolName}
+            input={toolInput}
+            result={resultContent}
+          />
+          {backgroundTaskLink}
+        </>
+      );
+
     case 'Agent':
       return (
         <div className="flex flex-col gap-1 -mt-0.5">
@@ -206,11 +224,40 @@ export function ToolContent({
     
     default:
       return (
-        <FallbackTool
-          toolName={toolName}
-          input={toolInput}
-          result={resultContent}
-        />
+        <>
+          <FallbackTool
+            toolName={toolName}
+            input={toolInput}
+            result={resultContent}
+          />
+          {backgroundTaskLink}
+        </>
       );
   }
+}
+
+function BackgroundTaskLink({ task }: { task: BackgroundTaskSummary }) {
+  const href = `/c/${task.sessionId}/background-tasks/${task.taskId}${window.location.hash || ''}`;
+  const statusText = getBackgroundTaskStatusText(task);
+
+  return (
+    <div className="pl-4">
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        className="text-sm flex items-center gap-1 text-foreground hover:text-foreground/80 underline underline-offset-4"
+      >
+        <Activity size={16} />
+        查看后台任务 · {statusText}
+      </a>
+    </div>
+  );
+}
+
+function getBackgroundTaskStatusText(task: BackgroundTaskSummary): string {
+  if (task.status === 'running') return '运行中';
+  if (task.status === 'completed') return task.exitCode !== undefined ? `已完成 (${task.exitCode})` : '已完成';
+  if (task.status === 'failed') return task.exitCode !== undefined ? `失败 (${task.exitCode})` : '失败';
+  return '状态未知';
 }

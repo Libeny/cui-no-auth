@@ -1,6 +1,6 @@
 import React from 'react';
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages';
-import type { ChatMessage, ToolResult, SubagentSummary } from '../../types';
+import type { ChatMessage, ToolResult, SubagentSummary, BackgroundTaskSummary } from '../../types';
 import { ToolLabel } from './ToolLabel';
 import { ToolContent } from './ToolContent';
 
@@ -19,6 +19,7 @@ interface ToolUseRendererProps {
   model?: string;
   childrenMessages?: Record<string, ChatMessage[]>;
   subagent?: SubagentSummary;
+  backgroundTask?: BackgroundTaskSummary;
   expandedTasks?: Set<string>;
   onToggleTaskExpanded?: (toolUseId: string) => void;
 }
@@ -31,6 +32,7 @@ export function ToolUseRenderer({
   model,
   childrenMessages = {},
   subagent,
+  backgroundTask,
   expandedTasks = new Set(),
   onToggleTaskExpanded
 }: ToolUseRendererProps) {
@@ -52,6 +54,7 @@ export function ToolUseRenderer({
         childrenMessages={childrenMessages}
         toolResults={toolResults}
         subagent={subagent}
+        backgroundTask={backgroundTask}
       />
     </>
   );

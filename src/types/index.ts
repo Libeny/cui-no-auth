@@ -228,6 +228,35 @@ export interface SubagentDetailsResponse {
   };
 }
 
+export type BackgroundTaskStatus = 'running' | 'completed' | 'failed' | 'unknown';
+
+export interface BackgroundTaskSummary {
+  taskId: string;
+  sessionId: string;
+  status: BackgroundTaskStatus;
+  outputFile?: string;
+  outputFileExists: boolean;
+  outputFileSize?: number;
+  outputFileUpdatedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+  taskType?: string;
+  exitCode?: number;
+  description?: string;
+  summary?: string;
+  launchToolUseId?: string;
+  taskOutputToolUseIds: string[];
+  outputPreview?: string;
+}
+
+export interface BackgroundTaskDetailsResponse {
+  task: BackgroundTaskSummary;
+  output?: string;
+  outputSource: 'file' | 'snapshot' | 'none';
+  outputTruncated?: boolean;
+}
+
 
 export interface PermissionDecisionRequest {
   action: 'approve' | 'deny';

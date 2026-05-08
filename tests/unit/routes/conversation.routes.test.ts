@@ -33,6 +33,8 @@ describe('Conversation Routes - Unified Start/Resume Endpoint', () => {
 
     historyReader = {
       fetchConversation: vi.fn(),
+      listBackgroundTasks: vi.fn(),
+      fetchBackgroundTask: vi.fn(),
     } as any;
 
     conversationStatusManager = {
@@ -288,6 +290,52 @@ describe('Conversation Routes - Unified Start/Resume Endpoint', () => {
       expect(response.status).toBe(500);
       expect(response.body.error).toBe('Database error');
       expect(sessionInfoService.archiveAllSessions).toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/conversations/:sessionId/background-tasks', () => {
+    it('should list background tasks for a conversation', async () => {
+      const task = {
+        taskId: 'b123',
+        sessionId: 'session-123',
+        status: 'running',
+        outputFileExists: true,
+        taskOutputToolUseIds: [],
+      };
+      historyReader.listBackgroundTasks.mockResolvedValue([task] as any);
+
+      const response = await request(app)
+        .get('/api/conversations/session-123/background-tasks')
+        .send();
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ tasks: [task] });
+      expect(historyReader.listBackgroundTasks).toHaveBeenCalledWith('session-123');
+    });
+  });
+
+  describe('GET /api/conversations/:sessionId/background-tasks/:taskId', () => {
+    it('should return background task details', async () => {
+      const details = {
+        task: {
+          taskId: 'b123',
+          sessionId: 'session-123',
+          status: 'completed',
+          outputFileExists: false,
+          taskOutputToolUseIds: ['toolu_output'],
+        },
+        output: 'persisted output',
+        outputSource: 'snapshot',
+      };
+      historyReader.fetchBackgroundTask.mockResolvedValue(details as any);
+
+      const response = await request(app)
+        .get('/api/conversations/session-123/background-tasks/b123')
+        .send();
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(details);
+      expect(historyReader.fetchBackgroundTask).toHaveBeenCalledWith('session-123', 'b123');
     });
   });
 });

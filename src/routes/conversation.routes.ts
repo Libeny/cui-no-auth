@@ -14,6 +14,8 @@ import {
   SessionInfo,
   SubagentSummary,
   SubagentDetailsResponse,
+  BackgroundTaskSummary,
+  BackgroundTaskDetailsResponse,
 } from '@/types/index.js';
 import { RequestWithRequestId } from '@/types/express.js';
 import { ClaudeProcessManager } from '@/services/claude-process-manager.js';
@@ -370,6 +372,60 @@ export function createConversationRoutes(
         requestId,
         sessionId,
         subagentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      next(error);
+    }
+  });
+
+  router.get('/:sessionId/background-tasks', async (req: RequestWithRequestId, res, next) => {
+    const requestId = req.requestId;
+    const { sessionId } = req.params;
+
+    logger.debug('List background tasks request', {
+      requestId,
+      sessionId,
+    });
+
+    try {
+      if (sessionId.startsWith('codex:')) {
+        throw new CUIError('CONVERSATION_NOT_FOUND', `Conversation ${sessionId} is a Codex session`, 404);
+      }
+
+      const tasks: BackgroundTaskSummary[] = await historyReader.listBackgroundTasks(sessionId);
+      res.json({ tasks });
+    } catch (error) {
+      logger.debug('List background tasks failed', {
+        requestId,
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      next(error);
+    }
+  });
+
+  router.get('/:sessionId/background-tasks/:taskId', async (req: RequestWithRequestId, res, next) => {
+    const requestId = req.requestId;
+    const { sessionId, taskId } = req.params;
+
+    logger.debug('Get background task details request', {
+      requestId,
+      sessionId,
+      taskId,
+    });
+
+    try {
+      if (sessionId.startsWith('codex:')) {
+        throw new CUIError('CONVERSATION_NOT_FOUND', `Conversation ${sessionId} is a Codex session`, 404);
+      }
+
+      const response: BackgroundTaskDetailsResponse = await historyReader.fetchBackgroundTask(sessionId, taskId);
+      res.json(response);
+    } catch (error) {
+      logger.debug('Get background task details failed', {
+        requestId,
+        sessionId,
+        taskId,
         error: error instanceof Error ? error.message : String(error),
       });
       next(error);
