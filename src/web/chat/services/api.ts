@@ -15,6 +15,7 @@ import type {
   FileSystemListQuery,
   FileSystemListResponse,
   CommandsResponse,
+  SystemStatusResponse,
 } from '../types';
 import type { EnvPreset } from '../../../types/config';
 import { getAuthToken } from '../../hooks/useAuth';
@@ -202,6 +203,8 @@ class ApiService {
     searchParams.append('path', params.path);
     if (params.recursive !== undefined) searchParams.append('recursive', params.recursive.toString());
     if (params.respectGitignore !== undefined) searchParams.append('respectGitignore', params.respectGitignore.toString());
+    if (params.maxEntries !== undefined) searchParams.append('maxEntries', params.maxEntries.toString());
+    if (params.maxDepth !== undefined) searchParams.append('maxDepth', params.maxDepth.toString());
     
     return this.apiCall(`/api/filesystem/list?${searchParams}`);
   }
@@ -215,8 +218,12 @@ class ApiService {
     return this.apiCall(`/api/system/commands?${searchParams}`);
   }
 
-  async getSystemStatus(): Promise<any> {
+  async getSystemStatus(): Promise<SystemStatusResponse> {
     return this.apiCall('/api/system/status');
+  }
+
+  async getAuthStatus(): Promise<{ authRequired: boolean; readOnly: boolean }> {
+    return this.apiCall('/api/system/auth-status');
   }
 
   async getRecentLogs(limit?: number): Promise<{ logs: string[] }> {

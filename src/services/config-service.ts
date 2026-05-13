@@ -330,6 +330,9 @@ export class ConfigService {
     if (server.port !== undefined && typeof server.port !== 'number') {
       throw new Error('Invalid config: server.port must be a number');
     }
+    if (server.readOnly !== undefined && typeof server.readOnly !== 'boolean') {
+      throw new Error('Invalid config: server.readOnly must be a boolean');
+    }
     if (
       server.historyPollIntervalSeconds !== undefined &&
       (!Number.isFinite(server.historyPollIntervalSeconds) || server.historyPollIntervalSeconds <= 0)

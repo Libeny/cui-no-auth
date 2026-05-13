@@ -55,6 +55,18 @@ type HistoryEntry = {
   message?: string | HistoryEntryMessage;
 };
 
+type ChangedSessionFile = {
+  filePath: string;
+  fileName: string;
+  sessionId: string;
+  mtime: number;
+  fileSize: number;
+  eventType: 'created' | 'modified';
+};
+
+const DEFAULT_CLAUDE_SCAN_CONCURRENCY = 4;
+const MAX_SCAN_CONCURRENCY = 32;
+
 export class HistoryIndexer {
   private logger: Logger;
   private claudeHomePath: string;
@@ -65,12 +77,14 @@ export class HistoryIndexer {
   private pollTimer?: NodeJS.Timeout;
   private isScanInProgress = false;
   private pollIntervalMs: number;
+  private scanConcurrency: number;
 
-  constructor(sessionInfoService?: SessionInfoService, options: { intervalMs?: number } = {}) {
+  constructor(sessionInfoService?: SessionInfoService, options: { intervalMs?: number; scanConcurrency?: number } = {}) {
     this.logger = createLogger('HistoryIndexer');
     this.claudeHomePath = path.join(os.homedir(), '.claude');
     this.sessionInfoService = sessionInfoService || SessionInfoService.getInstance();
     this.pollIntervalMs = options.intervalMs ?? 30000;
+    this.scanConcurrency = this.normalizeConcurrency(options.scanConcurrency, DEFAULT_CLAUDE_SCAN_CONCURRENCY);
   }
 
   setSessionUpdateBus(sessionUpdateBus: SessionUpdateBus): void {
@@ -166,6 +180,7 @@ export class HistoryIndexer {
     
     try {
       const projectDirs = await fsPromises.readdir(projectsDir);
+      const changedFiles: ChangedSessionFile[] = [];
       
       for (const projectDirName of projectDirs) {
         if (this.shouldStop) break;
@@ -195,40 +210,84 @@ export class HistoryIndexer {
             if (existingInfo && hasSamePath && hasSameMtime && hasSameSize) {
               continue;
             }
-            
-            // Parse and extract metadata
-            const metadata = await this.extractMetadata(filePath, sessionId, fileStats.mtimeMs, fileStats.size);
-            if (metadata) {
-              currentBatch.push(metadata);
-              currentEvents.push({
-                sessionId,
-                eventType: existingInfo ? 'modified' : 'created',
-                metadata,
-              });
-            }
-            
-            // Flush batch if full
-            if (currentBatch.length >= batchSize) {
-              await this.flushBatch(currentBatch, currentEvents);
-              currentBatch = [];
-              currentEvents = [];
-            }
-            
+
+            changedFiles.push({
+              filePath,
+              fileName: file,
+              sessionId,
+              mtime: fileStats.mtimeMs,
+              fileSize: fileStats.size,
+              eventType: existingInfo ? 'modified' : 'created',
+            });
+
           } catch (error) {
             this.logger.warn(`Failed to index file ${file}`, error);
           }
         }
       }
-      
+
+      const indexed = await this.mapWithConcurrency(changedFiles, this.scanConcurrency, async (file) => {
+        if (this.shouldStop) return null;
+
+        try {
+          const metadata = await this.extractMetadata(file.filePath, file.sessionId, file.mtime, file.fileSize);
+          return metadata ? { sessionId: file.sessionId, eventType: file.eventType, metadata } : null;
+        } catch (error) {
+          this.logger.warn(`Failed to index file ${file.fileName}`, error);
+          return null;
+        }
+      });
+
+      for (const result of indexed) {
+        if (!result) continue;
+
+        currentBatch.push(result.metadata);
+        currentEvents.push(result);
+
+        // Flush batch if full
+        if (currentBatch.length >= batchSize) {
+          await this.flushBatch(currentBatch, currentEvents);
+          currentBatch = [];
+          currentEvents = [];
+        }
+      }
+
       // Flush remaining
       if (currentBatch.length > 0) {
         await this.flushBatch(currentBatch, currentEvents);
       }
-      
+
     } catch (error) {
       this.logger.error('Error scanning projects', error);
       throw error;
     }
+  }
+
+  private async mapWithConcurrency<T, R>(
+    items: T[],
+    concurrency: number,
+    mapper: (item: T) => Promise<R>
+  ): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let nextIndex = 0;
+
+    const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+      while (!this.shouldStop && nextIndex < items.length) {
+        const currentIndex = nextIndex++;
+        results[currentIndex] = await mapper(items[currentIndex]);
+      }
+    });
+
+    await Promise.all(workers);
+    return results;
+  }
+
+  private normalizeConcurrency(value: number | undefined, fallback: number): number {
+    if (value === undefined || !Number.isFinite(value) || value <= 0) {
+      return fallback;
+    }
+
+    return Math.min(Math.floor(value), MAX_SCAN_CONCURRENCY);
   }
 
   private async flushBatch(

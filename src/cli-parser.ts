@@ -5,6 +5,7 @@ export interface CLIConfig {
   host?: string;
   token?: string;
   skipAuthToken?: boolean;
+  readOnly?: boolean;
   historyPollIntervalSeconds?: number;
 }
 
@@ -57,6 +58,15 @@ export function parseArgs(argv: string[]): CLIConfig {
         config.skipAuthToken = true;
         break;
 
+      case '--read-only':
+        config.readOnly = true;
+        break;
+
+      case '--allow-write':
+      case '--allow-interaction':
+        config.readOnly = false;
+        break;
+
       case '--history-poll-interval':
       case '--history-poll-interval-seconds':
         if (i + 1 < args.length) {
@@ -75,7 +85,7 @@ export function parseArgs(argv: string[]): CLIConfig {
         
       default:
         logger.error(`Unknown argument: ${arg}`);
-        logger.info('Usage: cui-server [--port <number>] [--host <string>] [--token <string>] [--skip-auth-token] [--history-poll-interval-seconds <seconds>]');
+        logger.info('Usage: cui-server [--port <number>] [--host <string>] [--token <string>] [--skip-auth-token] [--read-only] [--allow-write] [--history-poll-interval-seconds <seconds>]');
         process.exit(1);
     }
   }

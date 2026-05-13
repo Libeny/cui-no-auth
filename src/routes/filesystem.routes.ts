@@ -27,6 +27,18 @@ export function createFileSystemRoutes(
     throw new CUIError('INVALID_PARAM', `${paramName} must be boolean (true/false)`, 400);
   };
 
+  const parsePositiveIntegerParam = (value: unknown, paramName: string): number | undefined => {
+    if (value === undefined) return undefined;
+    const raw = Array.isArray(value) ? value[0] : value;
+    if (typeof raw !== 'string' && typeof raw !== 'number') {
+      throw new CUIError('INVALID_PARAM', `${paramName} must be a positive integer`, 400);
+    }
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw new CUIError('INVALID_PARAM', `${paramName} must be a positive integer`, 400);
+    }
+    return parsed;
+  };
 
   // List directory contents
   router.get('/list', async (req: Request<Record<string, never>, FileSystemListResponse, Record<string, never>, FileSystemListQuery> & RequestWithRequestId, res, next) => {
@@ -35,7 +47,9 @@ export function createFileSystemRoutes(
       requestId,
       path: req.query.path,
       recursive: req.query.recursive,
-      respectGitignore: req.query.respectGitignore
+      respectGitignore: req.query.respectGitignore,
+      maxEntries: req.query.maxEntries,
+      maxDepth: req.query.maxDepth,
     });
     
     try {
@@ -47,17 +61,21 @@ export function createFileSystemRoutes(
       // Parse boolean query parameters
       const recursive = parseBooleanParam(req.query.recursive, 'recursive') ?? false;
       const respectGitignore = parseBooleanParam(req.query.respectGitignore, 'respectGitignore') ?? false;
+      const maxEntries = parsePositiveIntegerParam(req.query.maxEntries, 'maxEntries');
+      const maxDepth = parsePositiveIntegerParam(req.query.maxDepth, 'maxDepth');
       
       const result = await fileSystemService.listDirectory(
         req.query.path,
         recursive,
-        respectGitignore
+        respectGitignore,
+        { maxEntries, maxDepth }
       );
       
       logger.debug('Directory listed successfully', {
         requestId,
         path: result.path,
-        entryCount: result.entries.length
+        entryCount: result.entries.length,
+        truncated: result.truncated,
       });
       
       res.json(result);

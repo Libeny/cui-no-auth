@@ -27,6 +27,10 @@ describe('CodexHistoryReader', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it('defaults Codex scanning to 6 workers', () => {
+    expect((reader as any).scanConcurrency).toBe(6);
+  });
+
   it('lists Codex sessions from dated rollout JSONL files', async () => {
     await writeSessionFile(tempDir, '2026/05/06/rollout-2026-05-06T01-02-03-session-123.jsonl', [
       sessionMeta({ id: 'session-123', cwd: '/repo/app', model: 'gpt-5.4', timestamp: '2026-05-06T01:02:03.000Z' }),
@@ -80,6 +84,87 @@ describe('CodexHistoryReader', () => {
         summary: 'Cached Codex task',
       }),
     );
+  });
+
+  it('lists Codex conversations from persistent index without scanning JSONL files', async () => {
+    const sessionInfoService = {
+      getCodexConversations: vi.fn().mockResolvedValue({
+        conversations: [
+          indexedSessionInfo({
+            sessionId: 'codex:indexed-session',
+            summary: 'Indexed Codex task',
+            projectPath: '/repo/indexed',
+            model: 'gpt-5.5',
+            messageCount: 7,
+            filePath: path.join(tempDir, 'sessions/2026/05/06/rollout-indexed-session.jsonl'),
+            fileSize: 321,
+            lastScannedAt: 987,
+            createdAt: '2026-05-06T01:02:03.000Z',
+            updatedAt: '2026-05-06T01:02:09.000Z',
+          }),
+        ],
+        total: 1,
+      }),
+    };
+    reader = new CodexHistoryReader({ codexHomePath: tempDir, sessionInfoService: sessionInfoService as any });
+    const scanSpy = vi.spyOn(reader as any, 'scanSessionMetadata');
+
+    const result = await reader.listConversations({ limit: 20, offset: 0 });
+
+    expect(result.total).toBe(1);
+    expect(result.conversations[0]).toEqual(expect.objectContaining({
+      sessionId: 'codex:indexed-session',
+      projectPath: '/repo/indexed',
+      summary: 'Indexed Codex task',
+      messageCount: 7,
+      model: 'gpt-5.5',
+    }));
+    expect(scanSpy).not.toHaveBeenCalled();
+  });
+
+  it('reuses fresh indexed Codex metadata during scans without reparsing unchanged JSONL files', async () => {
+    const relativePath = '2026/05/06/rollout-session-fresh.jsonl';
+    await writeSessionFile(tempDir, relativePath, [
+      sessionMeta({ id: 'session-fresh', cwd: '/repo/fresh', model: 'gpt-5.5', timestamp: '2026-05-06T01:02:03.000Z' }),
+      userMessage('session-fresh', 'Use cached metadata', '2026-05-06T01:02:04.000Z'),
+      assistantMessage('Done', '2026-05-06T01:02:05.000Z'),
+    ]);
+    const filePath = path.join(tempDir, 'sessions', relativePath);
+    const stats = await fs.stat(filePath);
+    const sessionInfoService = {
+      getCodexConversations: vi.fn().mockResolvedValue({
+        conversations: [
+          indexedSessionInfo({
+            sessionId: 'codex:session-fresh',
+            summary: 'Use cached metadata',
+            projectPath: '/repo/fresh',
+            model: 'gpt-5.5',
+            messageCount: 2,
+            filePath,
+            fileSize: stats.size,
+            lastScannedAt: stats.mtimeMs,
+            createdAt: '2026-05-06T01:02:03.000Z',
+            updatedAt: '2026-05-06T01:02:05.000Z',
+          }),
+        ],
+        total: 1,
+      }),
+      bulkUpsertIndexedMetadata: vi.fn(),
+    };
+    reader = new CodexHistoryReader({ codexHomePath: tempDir, sessionInfoService: sessionInfoService as any });
+    const extractSpy = vi.spyOn(reader as any, 'extractMetadata');
+
+    const metadata = await reader.listMetadata();
+
+    expect(metadata).toHaveLength(1);
+    expect(metadata[0]).toEqual(expect.objectContaining({
+      sessionId: 'codex:session-fresh',
+      filePath,
+      fileSize: stats.size,
+      lastScannedAt: stats.mtimeMs,
+    }));
+    expect(extractSpy).not.toHaveBeenCalled();
+    expect(sessionInfoService.bulkUpsertIndexedMetadata).not.toHaveBeenCalled();
   });
 
   it('maps Codex messages and shell tools into ConversationMessage records', async () => {
@@ -351,6 +436,51 @@ function turnContext({
       cwd,
       model,
     },
+  };
+}
+
+function indexedSessionInfo({
+  sessionId,
+  summary,
+  projectPath,
+  model,
+  messageCount,
+  filePath,
+  fileSize,
+  lastScannedAt,
+  createdAt,
+  updatedAt,
+}: {
+  sessionId: string;
+  summary: string;
+  projectPath: string;
+  model: string;
+  messageCount: number;
+  filePath: string;
+  fileSize: number;
+  lastScannedAt: number;
+  createdAt: string;
+  updatedAt: string;
+}) {
+  return {
+    sessionId,
+    custom_name: '',
+    created_at: createdAt,
+    updated_at: updatedAt,
+    version: 1,
+    pinned: false,
+    archived: false,
+    continuation_session_id: '',
+    initial_commit_head: '',
+    permission_mode: 'default',
+    summary,
+    project_path: projectPath,
+    message_count: messageCount,
+    total_duration: 0,
+    model,
+    last_scanned_at: lastScannedAt,
+    file_path: filePath,
+    file_size: fileSize,
   };
 }
 

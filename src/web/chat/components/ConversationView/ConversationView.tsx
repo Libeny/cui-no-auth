@@ -51,6 +51,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   const [envPresets, setEnvPresets] = useState<EnvPreset[]>([]);
   const [refreshFeedback, setRefreshFeedback] = useState<RefreshFeedback | null>(null);
   const [backendUsageSummary, setBackendUsageSummary] = useState<TokenUsageSummary | undefined>(undefined);
+  const [readOnly, setReadOnly] = useState(true);
   const composerRef = useRef<ComposerRef>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const messageFingerprintRef = useRef<string>('');
@@ -105,6 +106,26 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   // Load env presets for the composer
   useEffect(() => {
     api.getEnvPresets().then(setEnvPresets).catch(() => { /* ignore */ });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    api.getAuthStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setReadOnly(status.readOnly !== false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setReadOnly(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Clear navigation state to prevent issues on refresh
@@ -254,13 +275,13 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
       if (showLoading) setIsLoading(false);
       
       // Focus the input after loading is complete
-      if (shouldFocus) {
+      if (shouldFocus && !readOnly) {
         setTimeout(() => {
           composerRef.current?.focusInput();
         }, 100);
       }
     }
-  }, [sessionId, setAllMessages, setPermissionRequest, isCodexSession]);
+  }, [sessionId, setAllMessages, setPermissionRequest, isCodexSession, readOnly]);
 
   // Initial load
   useEffect(() => {
@@ -488,6 +509,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
         refreshFeedback={refreshFeedback}
       />
 
+      {!readOnly && (
       <div
         className="sticky bottom-0 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm z-10 w-full flex justify-center px-2 pb-6"
         aria-label="Message composer section"
@@ -505,23 +527,10 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
             showPermissionUI={resolvedProvider === 'claude'}
             showStopButton={resolvedProvider === 'claude'}
             showModelSelector={resolvedProvider === 'claude'}
-            enableFileAutocomplete={resolvedProvider === 'claude'}
+            enableFileAutocomplete={false}
             dropdownPosition="above"
             workingDirectory={conversationSummary?.projectPath}
             envPresets={resolvedProvider === 'claude' ? envPresets : []}
-            onFetchFileSystem={async (directory) => {
-              try {
-                const response = await api.listDirectory({
-                  path: directory || currentWorkingDirectory,
-                  recursive: true,
-                  respectGitignore: true,
-                });
-                return response.entries;
-              } catch (error) {
-                console.error('Failed to fetch file system entries:', error);
-                return [];
-              }
-            }}
             onFetchCommands={async (workingDirectory) => {
               try {
                 const response = await api.getCommands(workingDirectory || currentWorkingDirectory);
@@ -534,6 +543,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
           />
         </div>
       </div>
+      )}
 
     </div>
   );

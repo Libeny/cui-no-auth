@@ -9,6 +9,20 @@ import { createLogger } from './logger.js';
 import { type Logger } from './logger.js';
 
 const execAsync = promisify(exec);
+const DEFAULT_MAX_DIRECTORY_ENTRIES = 2000;
+const ABSOLUTE_MAX_DIRECTORY_ENTRIES = 10000;
+const DEFAULT_MAX_RECURSIVE_DEPTH = 4;
+const ABSOLUTE_MAX_RECURSIVE_DEPTH = 12;
+
+interface DirectoryListOptions {
+  maxEntries?: number;
+  maxDepth?: number;
+}
+
+interface DirectoryListResult {
+  entries: FileSystemEntry[];
+  truncated: boolean;
+}
 
 /**
  * Service for secure file system operations
@@ -34,9 +48,11 @@ export class FileSystemService {
   async listDirectory(
     requestedPath: string, 
     recursive: boolean = false,
-    respectGitignore: boolean = false
-  ): Promise<{ path: string; entries: FileSystemEntry[]; total: number }> {
-    this.logger.debug('List directory requested', { requestedPath, recursive, respectGitignore });
+    respectGitignore: boolean = false,
+    options: DirectoryListOptions = {}
+  ): Promise<{ path: string; entries: FileSystemEntry[]; total: number; truncated?: boolean }> {
+    const limits = this.normalizeDirectoryListOptions(options);
+    this.logger.debug('List directory requested', { requestedPath, recursive, respectGitignore, limits });
     
     try {
       // Validate and normalize path
@@ -55,9 +71,10 @@ export class FileSystemService {
       }
       
       // Get entries
-      const entries: FileSystemEntry[] = recursive
-        ? await this.listDirectoryRecursive(safePath, safePath, ig)
-        : await this.listDirectoryFlat(safePath, ig);
+      const listing = recursive
+        ? await this.listDirectoryRecursive(safePath, safePath, ig, limits)
+        : await this.listDirectoryFlat(safePath, ig, limits);
+      const entries = listing.entries;
       
       // Sort entries: directories first, then by name
       entries.sort((a, b) => {
@@ -70,6 +87,7 @@ export class FileSystemService {
       this.logger.debug('Directory listed successfully', { 
         path: safePath, 
         entryCount: entries.length,
+        truncated: listing.truncated,
         recursive,
         respectGitignore
       });
@@ -77,7 +95,8 @@ export class FileSystemService {
       return {
         path: safePath,
         entries,
-        total: entries.length
+        total: entries.length,
+        truncated: listing.truncated || undefined
       };
     } catch (error) {
       if (error instanceof CUIError) {
@@ -264,12 +283,19 @@ export class FileSystemService {
    */
   private async listDirectoryFlat(
     dirPath: string,
-    ig: ReturnType<typeof ignore> | null
-  ): Promise<FileSystemEntry[]> {
+    ig: ReturnType<typeof ignore> | null,
+    options: Required<DirectoryListOptions>
+  ): Promise<DirectoryListResult> {
     const dirents = await fs.readdir(dirPath, { withFileTypes: true });
     const entries: FileSystemEntry[] = [];
+    let truncated = false;
     
     for (const dirent of dirents) {
+      if (entries.length >= options.maxEntries) {
+        truncated = true;
+        break;
+      }
+
       // Check gitignore BEFORE any expensive operations
       if (ig && ig.ignores(dirent.name)) {
         continue;
@@ -285,7 +311,7 @@ export class FileSystemService {
       });
     }
     
-    return entries;
+    return { entries, truncated };
   }
 
   /**
@@ -294,11 +320,18 @@ export class FileSystemService {
   private async listDirectoryRecursive(
     dirPath: string,
     basePath: string,
-    ig: ReturnType<typeof ignore> | null
-  ): Promise<FileSystemEntry[]> {
+    ig: ReturnType<typeof ignore> | null,
+    options: Required<DirectoryListOptions>
+  ): Promise<DirectoryListResult> {
     const entries: FileSystemEntry[] = [];
+    let truncated = false;
     
-    const traverse = async (currentPath: string): Promise<void> => {
+    const traverse = async (currentPath: string, depth: number): Promise<void> => {
+      if (entries.length >= options.maxEntries) {
+        truncated = true;
+        return;
+      }
+
       let dirents;
       try {
         dirents = await fs.readdir(currentPath, { withFileTypes: true });
@@ -314,6 +347,11 @@ export class FileSystemService {
       }
       
       for (const dirent of dirents) {
+        if (entries.length >= options.maxEntries) {
+          truncated = true;
+          return;
+        }
+
         const fullPath = path.join(currentPath, dirent.name);
         const relativePath = path.relative(basePath, fullPath);
         
@@ -324,32 +362,57 @@ export class FileSystemService {
         }
         
         try {
-            const stats = await fs.stat(fullPath);
-            entries.push({
+          const stats = await fs.stat(fullPath);
+          entries.push({
             name: relativePath,
             type: dirent.isDirectory() ? 'directory' : 'file',
             size: dirent.isFile() ? stats.size : undefined,
             lastModified: stats.mtime.toISOString()
-            });
+          });
             
-            // Recurse into subdirectories (already checked it's not ignored)
-            if (dirent.isDirectory()) {
-            await traverse(fullPath);
+          if (dirent.isDirectory()) {
+            if (depth < options.maxDepth) {
+              await traverse(fullPath, depth + 1);
+            } else {
+              truncated = true;
             }
+          }
         } catch (error) {
-            // Skip individual files/subdirs that can't be accessed/stated
-            const errorCode = (error as NodeJS.ErrnoException).code;
-            if (errorCode === 'EACCES' || errorCode === 'EPERM' || errorCode === 'ENOENT') {
-                this.logger.debug(`Skipping entry due to access error: ${fullPath}`, { error });
-                continue;
-            }
-            throw error;
+          // Skip individual files/subdirs that can't be accessed/stated
+          const errorCode = (error as NodeJS.ErrnoException).code;
+          if (errorCode === 'EACCES' || errorCode === 'EPERM' || errorCode === 'ENOENT') {
+            this.logger.debug(`Skipping entry due to access error: ${fullPath}`, { error });
+            continue;
+          }
+          throw error;
         }
       }
     };
     
-    await traverse(dirPath);
-    return entries;
+    await traverse(dirPath, 0);
+    return { entries, truncated };
+  }
+
+  private normalizeDirectoryListOptions(options: DirectoryListOptions): Required<DirectoryListOptions> {
+    return {
+      maxEntries: this.clampPositiveInteger(
+        options.maxEntries,
+        DEFAULT_MAX_DIRECTORY_ENTRIES,
+        ABSOLUTE_MAX_DIRECTORY_ENTRIES
+      ),
+      maxDepth: this.clampPositiveInteger(
+        options.maxDepth,
+        DEFAULT_MAX_RECURSIVE_DEPTH,
+        ABSOLUTE_MAX_RECURSIVE_DEPTH
+      ),
+    };
+  }
+
+  private clampPositiveInteger(value: number | undefined, fallback: number, max: number): number {
+    if (value === undefined || !Number.isFinite(value) || value <= 0) {
+      return fallback;
+    }
+    return Math.min(Math.floor(value), max);
   }
 
   /**

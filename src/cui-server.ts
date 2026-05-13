@@ -59,6 +59,7 @@ interface CUIServerOverrides {
   host?: string;
   token?: string;
   skipAuthToken?: boolean;
+  readOnly?: boolean;
   historyPollIntervalSeconds?: number;
 }
 
@@ -92,6 +93,7 @@ export class CUIServer {
   private port: number;
   private host: string;
   private historyPollIntervalMs: number;
+  private readOnly: boolean;
   private configOverrides?: CUIServerOverrides;
 
   constructor(configOverrides?: CUIServerOverrides) {
@@ -110,6 +112,7 @@ export class CUIServer {
     this.port = 0;
     this.host = '';
     this.historyPollIntervalMs = 30000;
+    this.readOnly = true;
     
     this.logger.debug('Initializing CUIServer', {
       nodeEnv: process.env.NODE_ENV,
@@ -133,7 +136,7 @@ export class CUIServer {
     this.notificationService = new NotificationService();
     this.webPushService = WebPushService.getInstance();
     this.historyIndexer = new HistoryIndexer(this.sessionInfoService);
-    this.codexHistoryReader = new CodexHistoryReader();
+    this.codexHistoryReader = new CodexHistoryReader({ sessionInfoService: this.sessionInfoService });
     this.codexHistoryIndexer = new CodexHistoryIndexer(this.codexHistoryReader);
     this.sessionUpdateBus = new SessionUpdateBus();
     this.sessionUpdateBroadcaster = new SessionUpdateBroadcaster(this.sessionUpdateBus, this.streamManager);
@@ -207,6 +210,7 @@ export class CUIServer {
       this.port = this.configOverrides?.port ?? config.server.port;
       this.host = this.configOverrides?.host ?? config.server.host;
       this.historyPollIntervalMs = this.resolveHistoryPollIntervalMs(config.server.historyPollIntervalSeconds);
+      this.readOnly = this.resolveReadOnly(config.server.readOnly);
       this.historyIndexer.setPollIntervalMs(this.historyPollIntervalMs);
       this.codexHistoryIndexer.setPollIntervalMs(this.historyPollIntervalMs);
       
@@ -214,6 +218,7 @@ export class CUIServer {
         machineId: config.machine_id,
         port: this.port,
         host: this.host,
+        readOnly: this.readOnly,
         historyPollIntervalSeconds: this.historyPollIntervalMs / 1000,
         overrides: this.configOverrides ? Object.keys(this.configOverrides) : []
       });
@@ -261,6 +266,7 @@ export class CUIServer {
       this.configService.onChange(async (newConfig) => {
         try {
           this.historyPollIntervalMs = this.resolveHistoryPollIntervalMs(newConfig.server.historyPollIntervalSeconds);
+          this.readOnly = this.resolveReadOnly(newConfig.server.readOnly);
           this.historyIndexer.setPollIntervalMs(this.historyPollIntervalMs);
           this.codexHistoryIndexer.setPollIntervalMs(this.historyPollIntervalMs);
           await this.initializeOrReloadRouter(newConfig);
@@ -285,6 +291,10 @@ export class CUIServer {
   private resolveHistoryPollIntervalMs(configIntervalSeconds?: number): number {
     const seconds = this.configOverrides?.historyPollIntervalSeconds ?? configIntervalSeconds ?? 30;
     return Math.max(1, seconds) * 1000;
+  }
+
+  private resolveReadOnly(configReadOnly?: boolean): boolean {
+    return this.configOverrides?.readOnly ?? configReadOnly ?? true;
   }
 
   /**
@@ -510,8 +520,8 @@ export class CUIServer {
   private setupRoutes(): void {
     // System routes (includes health check) - before auth
     const skipAuth = this.configOverrides?.skipAuthToken;
-    this.app.use('/api/system', createSystemRoutes(this.processManager, this.historyReader, skipAuth));
-    this.app.use('/', createSystemRoutes(this.processManager, this.historyReader, skipAuth)); // For /health at root
+    this.app.use('/api/system', createSystemRoutes(this.processManager, this.historyReader, skipAuth, () => this.readOnly));
+    this.app.use('/', createSystemRoutes(this.processManager, this.historyReader, skipAuth, () => this.readOnly)); // For /health at root
     
     // Permission routes - before auth (needed for MCP server communication)
     this.app.use('/api/permissions', createPermissionRoutes(this.permissionTracker));
@@ -540,7 +550,8 @@ export class CUIServer {
       this.sessionInfoService,
       this.conversationStatusManager,
       this.toolMetricsService,
-      this.configService
+      this.configService,
+      { readOnly: () => this.readOnly }
     ));
     this.app.use('/api/codex-conversations', createCodexConversationRoutes(this.codexHistoryReader));
     this.app.use('/api/filesystem', createFileSystemRoutes(this.fileSystemService));

@@ -135,7 +135,7 @@ describe('CUIServer', () => {
   };
 
   // Helper function to create server instances for tests
-  const createTestServer = (config?: { port?: number }) => {
+  const createTestServer = (config?: { port?: number; readOnly?: boolean }) => {
     const testPort = config?.port || generateTestPort();
     
     // Mock ConfigService for this test
@@ -164,6 +164,7 @@ describe('CUIServer', () => {
     
     const server = new CUIServer({
       port: testPort,
+      readOnly: false,
       ...config
     });
     // Track the server for cleanup

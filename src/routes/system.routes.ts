@@ -11,10 +11,12 @@ import { execSync } from 'child_process';
 export function createSystemRoutes(
   processManager: ClaudeProcessManager,
   historyReader: ClaudeHistoryReader,
-  skipAuthToken: boolean = false
+  skipAuthToken: boolean = false,
+  readOnly: boolean | (() => boolean) = true
 ): Router {
   const router = Router();
   const logger = createLogger('SystemRoutes');
+  const isReadOnly = () => typeof readOnly === 'function' ? readOnly() : readOnly;
 
   // Health check
   router.get('/health', (req, res) => {
@@ -28,7 +30,7 @@ export function createSystemRoutes(
 
   // Auth status endpoint
   router.get('/auth-status', (req, res) => {
-    res.json({ authRequired: !skipAuthToken });
+    res.json({ authRequired: !skipAuthToken, readOnly: isReadOnly() });
   });
 
   // Get system status
@@ -37,7 +39,7 @@ export function createSystemRoutes(
     logger.debug('Get system status request', { requestId });
     
     try {
-      const systemStatus = await getSystemStatus(processManager, historyReader, logger, skipAuthToken);
+      const systemStatus = await getSystemStatus(processManager, historyReader, logger, skipAuthToken, isReadOnly());
       
       logger.debug('System status retrieved', {
         requestId,
@@ -94,7 +96,8 @@ async function getSystemStatus(
   processManager: ClaudeProcessManager,
   historyReader: ClaudeHistoryReader,
   logger: Logger,
-  skipAuthToken: boolean
+  skipAuthToken: boolean,
+  readOnly: boolean
 ): Promise<SystemStatusResponse> {
   try {
     // Get Claude version
@@ -126,7 +129,8 @@ async function getSystemStatus(
       configPath: historyReader.homePath,
       activeConversations: processManager.getActiveSessions().length,
       machineId,
-      authRequired: !skipAuthToken
+      authRequired: !skipAuthToken,
+      readOnly
     };
   } catch (_error) {
     throw new CUIError('SYSTEM_STATUS_ERROR', 'Failed to get system status', 500);

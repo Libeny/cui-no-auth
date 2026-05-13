@@ -14,9 +14,11 @@ import type {
   ConversationListQuery,
   ConversationMessage,
   ConversationDetailsResponse,
+  SessionInfo,
 } from '@/types/index.js';
 import { CUIError } from '@/types/index.js';
 import { createLogger, type Logger } from '../logger.js';
+import type { SessionInfoService } from '../session-info-service.js';
 import { parseCodexJsonlFile } from './codex-jsonl-parser.js';
 import {
   extractCodexSessionMetadata,
@@ -26,15 +28,33 @@ import {
 } from './codex-event-mapper.js';
 import { buildTokenUsageSummary } from '@/utils/token-usage.js';
 
+type IndexedSessionInfo = SessionInfo & { sessionId?: string };
+type CodexSessionInfoService = Pick<
+  SessionInfoService,
+  'bulkUpsertIndexedMetadata' | 'getCodexConversations' | 'getExistingSessionInfo'
+>;
+
+const DEFAULT_CODEX_SCAN_CONCURRENCY = 6;
+const MAX_SCAN_CONCURRENCY = 32;
+
+interface CodexHistoryReaderOptions extends CodexReaderOptions {
+  sessionInfoService?: CodexSessionInfoService;
+  scanConcurrency?: number;
+}
+
 export class CodexHistoryReader {
   private codexHomePath: string;
   private logger: Logger;
+  private sessionInfoService?: CodexSessionInfoService;
+  private scanConcurrency: number;
   private metadataCache = new Map<string, CodexSessionMetadata>();
   private fileStateCache = new Map<string, { fileSize: number; lastScannedAt: number; metadata: CodexSessionMetadata | null }>();
   private scanPromise?: Promise<CodexSessionMetadata[]>;
 
-  constructor(options: CodexReaderOptions = {}) {
+  constructor(options: CodexHistoryReaderOptions = {}) {
     this.codexHomePath = options.codexHomePath || path.join(os.homedir(), '.codex');
+    this.sessionInfoService = options.sessionInfoService;
+    this.scanConcurrency = this.normalizeConcurrency(options.scanConcurrency);
     this.logger = createLogger('CodexHistoryReader');
   }
 
@@ -43,6 +63,11 @@ export class CodexHistoryReader {
   }
 
   async listConversations(filter?: ConversationListQuery): Promise<{ conversations: CodexConversationSummary[]; total: number }> {
+    const indexed = await this.listIndexedConversations(filter);
+    if (indexed) {
+      return indexed;
+    }
+
     const metadata = await this.listMetadata({ preferCache: true });
     const conversations = metadata.map((item) => this.toConversationSummary(item));
     const filtered = this.applyFilters(conversations, filter);
@@ -120,6 +145,9 @@ export class CodexHistoryReader {
     const cached = this.metadataCache.get(toCodexSessionId(rawSessionId));
     if (cached) return cached;
 
+    const indexed = await this.getIndexedMetadata(rawSessionId);
+    if (indexed) return indexed;
+
     const metadata = (await this.listMetadata()).find((item) => item.rawSessionId === rawSessionId);
     return metadata || null;
   }
@@ -128,6 +156,7 @@ export class CodexHistoryReader {
     const files = await this.findSessionFiles();
     const sessionsById = new Map<string, CodexSessionMetadata>();
     const currentFiles = new Set(files);
+    const indexedByFilePath = await this.loadIndexedMetadataByFilePath();
 
     for (const filePath of this.fileStateCache.keys()) {
       if (!currentFiles.has(filePath)) {
@@ -135,15 +164,22 @@ export class CodexHistoryReader {
       }
     }
 
-    for (const filePath of files) {
+    const scanResults = await this.mapWithConcurrency(files, this.scanConcurrency, async (filePath) => {
       try {
         const stats = await fs.stat(filePath);
         const cached = this.fileStateCache.get(filePath);
         if (cached && cached.fileSize === stats.size && cached.lastScannedAt === stats.mtimeMs) {
-          if (cached.metadata) {
-            sessionsById.set(cached.metadata.sessionId, cached.metadata);
-          }
-          continue;
+          return { metadata: cached.metadata, changed: false };
+        }
+
+        const indexed = indexedByFilePath.get(filePath);
+        if (indexed && indexed.fileSize === stats.size && indexed.lastScannedAt === stats.mtimeMs) {
+          this.fileStateCache.set(filePath, {
+            fileSize: stats.size,
+            lastScannedAt: stats.mtimeMs,
+            metadata: indexed,
+          });
+          return { metadata: indexed, changed: false };
         }
 
         const metadata = await this.extractMetadata(filePath, stats.mtimeMs, stats.size);
@@ -153,12 +189,25 @@ export class CodexHistoryReader {
           metadata,
         });
 
-        if (metadata) {
-          sessionsById.set(metadata.sessionId, metadata);
-        }
+        return { metadata, changed: Boolean(metadata) };
       } catch (error) {
         this.logger.warn('Failed to parse Codex session', { filePath, error });
+        return { metadata: null, changed: false };
       }
+    });
+
+    const changedMetadata: CodexSessionMetadata[] = [];
+    for (const result of scanResults) {
+      if (result.metadata) {
+        sessionsById.set(result.metadata.sessionId, result.metadata);
+        if (result.changed) {
+          changedMetadata.push(result.metadata);
+        }
+      }
+    }
+
+    if (changedMetadata.length > 0) {
+      await this.persistMetadata(changedMetadata);
     }
 
     this.metadataCache = sessionsById;
@@ -204,6 +253,23 @@ export class CodexHistoryReader {
       }
     }
 
+    const indexed = await this.getIndexedMetadata(rawSessionId);
+    if (indexed?.filePath) {
+      try {
+        await fs.access(indexed.filePath);
+        this.metadataCache.set(indexed.sessionId, indexed);
+        this.fileStateCache.set(indexed.filePath, {
+          fileSize: indexed.fileSize || 0,
+          lastScannedAt: indexed.lastScannedAt || 0,
+          metadata: indexed,
+        });
+        return indexed.filePath;
+      } catch {
+        this.metadataCache.delete(indexed.sessionId);
+        this.fileStateCache.delete(indexed.filePath);
+      }
+    }
+
     const files = await this.findSessionFiles();
 
     const filenameMatch = files.find((filePath) => path.basename(filePath).includes(rawSessionId));
@@ -218,6 +284,123 @@ export class CodexHistoryReader {
 
   private getCachedMetadata(): CodexSessionMetadata[] {
     return Array.from(this.metadataCache.values()).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }
+
+  private async listIndexedConversations(filter?: ConversationListQuery): Promise<{ conversations: CodexConversationSummary[]; total: number } | null> {
+    if (!this.sessionInfoService) return null;
+
+    try {
+      const result = await this.sessionInfoService.getCodexConversations(filter || {});
+      if (result.total === 0 && this.metadataCache.size === 0) {
+        return null;
+      }
+
+      return {
+        conversations: result.conversations
+          .map((info) => this.metadataFromIndexedSession(info as IndexedSessionInfo))
+          .filter((metadata): metadata is CodexSessionMetadata => Boolean(metadata))
+          .map((metadata) => this.toConversationSummary(metadata)),
+        total: result.total,
+      };
+    } catch (error) {
+      this.logger.warn('Failed to read Codex conversations from index', { error });
+      return null;
+    }
+  }
+
+  private async getIndexedMetadata(rawSessionId: string): Promise<CodexSessionMetadata | null> {
+    if (!this.sessionInfoService) return null;
+
+    try {
+      const info = await this.sessionInfoService.getExistingSessionInfo(toCodexSessionId(rawSessionId));
+      return info ? this.metadataFromIndexedSession(info as IndexedSessionInfo) : null;
+    } catch (error) {
+      this.logger.debug('Failed to read Codex metadata from index', { rawSessionId, error });
+      return null;
+    }
+  }
+
+  private async loadIndexedMetadataByFilePath(): Promise<Map<string, CodexSessionMetadata>> {
+    const indexed = new Map<string, CodexSessionMetadata>();
+    if (!this.sessionInfoService) return indexed;
+
+    try {
+      const result = await this.sessionInfoService.getCodexConversations({ sortBy: 'updated', order: 'desc' });
+      for (const info of result.conversations) {
+        const metadata = this.metadataFromIndexedSession(info as IndexedSessionInfo);
+        if (metadata?.filePath) {
+          indexed.set(metadata.filePath, metadata);
+        }
+      }
+    } catch (error) {
+      this.logger.warn('Failed to load indexed Codex file state', { error });
+    }
+
+    return indexed;
+  }
+
+  private metadataFromIndexedSession(info: IndexedSessionInfo): CodexSessionMetadata | null {
+    if (!info.sessionId) return null;
+
+    const fallbackTime = new Date(info.last_scanned_at || Date.now()).toISOString();
+    return {
+      sessionId: info.sessionId,
+      rawSessionId: fromCodexSessionId(info.sessionId),
+      filePath: info.file_path || '',
+      projectPath: info.project_path || '',
+      summary: info.summary || 'Codex session',
+      messageCount: info.message_count || 0,
+      totalDuration: info.total_duration || 0,
+      model: info.model || 'Codex',
+      createdAt: info.created_at || fallbackTime,
+      updatedAt: info.updated_at || info.created_at || fallbackTime,
+      fileSize: info.file_size,
+      lastScannedAt: info.last_scanned_at,
+    };
+  }
+
+  private async persistMetadata(metadata: CodexSessionMetadata[]): Promise<void> {
+    if (!this.sessionInfoService || metadata.length === 0) return;
+
+    await this.sessionInfoService.bulkUpsertIndexedMetadata(metadata.map((item) => ({
+      sessionId: item.sessionId,
+      summary: item.summary,
+      projectPath: item.projectPath,
+      messageCount: item.messageCount,
+      totalDuration: item.totalDuration,
+      model: item.model,
+      lastScannedAt: item.lastScannedAt ?? Date.now(),
+      filePath: item.filePath,
+      fileSize: item.fileSize,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+    })));
+  }
+
+  private async mapWithConcurrency<T, R>(
+    items: T[],
+    concurrency: number,
+    mapper: (item: T) => Promise<R>
+  ): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let nextIndex = 0;
+
+    const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex++;
+        results[currentIndex] = await mapper(items[currentIndex]);
+      }
+    });
+
+    await Promise.all(workers);
+    return results;
+  }
+
+  private normalizeConcurrency(value: number | undefined): number {
+    if (!Number.isFinite(value) || value === undefined || value <= 0) {
+      return DEFAULT_CODEX_SCAN_CONCURRENCY;
+    }
+    return Math.min(Math.floor(value), MAX_SCAN_CONCURRENCY);
   }
 
   private async extractMetadata(filePath: string, lastScannedAt: number, fileSize: number): Promise<CodexSessionMetadata | null> {

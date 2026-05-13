@@ -28,6 +28,10 @@ import { ToolMetricsService } from '@/services/ToolMetricsService.js';
 import { expandPreset, safeLogEnvOverrides } from '@/utils/env-preset.js';
 import { buildTokenUsageSummary } from '@/utils/token-usage.js';
 
+interface ConversationRouteOptions {
+  readOnly?: boolean | (() => boolean);
+}
+
 export function createConversationRoutes(
   processManager: ClaudeProcessManager,
   historyReader: ClaudeHistoryReader,
@@ -35,10 +39,17 @@ export function createConversationRoutes(
   sessionInfoService: SessionInfoService,
   conversationStatusManager: ConversationStatusManager,
   toolMetricsService: ToolMetricsService,
-  configService?: ConfigService
+  configService?: ConfigService,
+  options: ConversationRouteOptions = {}
 ): Router {
   const router = Router();
   const logger = createLogger('ConversationRoutes');
+  const isReadOnly = () => typeof options.readOnly === 'function' ? options.readOnly() : options.readOnly === true;
+  const assertWritable = (operation: string) => {
+    if (isReadOnly()) {
+      throw new CUIError('READ_ONLY_MODE', `CUI is running in read-only mode; ${operation} is disabled`, 403);
+    }
+  };
 
   // Start new conversation (also handles resume if resumedSessionId is provided)
   router.post('/start', async (req: Request<Record<string, never>, StartConversationResponse, StartConversationRequest> & RequestWithRequestId, res, next) => {
@@ -56,6 +67,8 @@ export function createConversationRoutes(
     });
     
     try {
+      assertWritable('starting conversations');
+
       // Validate required fields
       if (!req.body.workingDirectory) {
         throw new CUIError('MISSING_WORKING_DIRECTORY', 'workingDirectory is required', 400);
@@ -543,6 +556,8 @@ export function createConversationRoutes(
     });
     
     try {
+      assertWritable('stopping conversations');
+
       const success = await processManager.stopConversation(streamingId);
       
       logger.debug('Stop conversation result', {
@@ -575,6 +590,8 @@ export function createConversationRoutes(
     });
     
     try {
+      assertWritable('renaming sessions');
+
       // Validate required fields
       if (!sessionId || !sessionId.trim()) {
         throw new CUIError('MISSING_SESSION_ID', 'sessionId is required', 400);
@@ -632,6 +649,8 @@ export function createConversationRoutes(
     });
     
     try {
+      assertWritable('updating sessions');
+
       // Validate sessionId
       if (!sessionId || sessionId.trim() === '') {
         logger.debug('Invalid session ID', { requestId, sessionId });
@@ -724,6 +743,8 @@ export function createConversationRoutes(
     });
     
     try {
+      assertWritable('archiving sessions');
+
       // Archive all sessions
       const archivedCount = await sessionInfoService.archiveAllSessions();
       

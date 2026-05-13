@@ -120,6 +120,26 @@ describe('FileSystemService', () => {
         path.join('src', 'components', 'Button.tsx')
       ]));
     });
+
+    it('should cap recursive directory listings by maxEntries', async () => {
+      const result = await service.listDirectory(testDir, true, false, { maxEntries: 3 });
+
+      expect(result.entries).toHaveLength(3);
+      expect(result.total).toBe(3);
+      expect(result.truncated).toBe(true);
+    });
+
+    it('should cap recursive directory listings by maxDepth', async () => {
+      const result = await service.listDirectory(testDir, true, false, { maxDepth: 1 });
+
+      const names = result.entries.map(e => e.name);
+      expect(names).toContain('README.md');
+      expect(names).toContain('src');
+      expect(names).toContain(path.join('src', 'index.ts'));
+      expect(names).toContain(path.join('src', 'components'));
+      expect(names).not.toContain(path.join('src', 'components', 'Button.tsx'));
+      expect(result.truncated).toBe(true);
+    });
   });
 
   describe('Gitignore support', () => {

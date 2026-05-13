@@ -75,4 +75,14 @@ describe('Server Command Line Arguments', () => {
     // configOverrides should be set
     expect(serverAny.configOverrides).toEqual({ historyPollIntervalSeconds: 60 });
   });
+
+  it('should use overridden read-only mode when provided', async () => {
+    const server = new CUIServer({ readOnly: false });
+
+    // Access private fields for testing
+    const serverAny = server as any;
+
+    // configOverrides should be set
+    expect(serverAny.configOverrides).toEqual({ readOnly: false });
+  });
 });

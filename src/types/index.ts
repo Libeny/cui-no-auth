@@ -276,6 +276,7 @@ export interface SystemStatusResponse {
   activeConversations: number;
   machineId: string;
   authRequired: boolean;
+  readOnly: boolean;
 }
 
 // Stream event types
@@ -312,12 +313,15 @@ export interface FileSystemListQuery {
   path: string;
   recursive?: boolean;
   respectGitignore?: boolean;
+  maxEntries?: number;
+  maxDepth?: number;
 }
 
 export interface FileSystemListResponse {
   path: string;
   entries: FileSystemEntry[];
   total: number;
+  truncated?: boolean;
 }
 
 export interface FileSystemReadQuery {

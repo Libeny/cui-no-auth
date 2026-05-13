@@ -15,6 +15,11 @@ export interface ServerConfig {
   host: string;
   port: number;
   /**
+   * When true, the web UI is read-only and conversation mutation endpoints are disabled.
+   * Defaults to true so opening CUI does not spawn agents or modify sessions by accident.
+   */
+  readOnly?: boolean;
+  /**
    * Background history polling interval in seconds.
    * Applies to Claude and Codex history discovery/update checks.
    */
@@ -133,6 +138,7 @@ export const DEFAULT_CONFIG: Omit<CUIConfig, 'machine_id' | 'authToken'> = {
   server: {
     host: 'localhost',
     port: 3001,
+    readOnly: true,
     historyPollIntervalSeconds: 30
   },
   interface: {

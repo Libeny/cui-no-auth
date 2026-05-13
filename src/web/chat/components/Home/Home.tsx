@@ -30,6 +30,7 @@ export function Home() {
   const [selectedEnvPresetId, setSelectedEnvPresetId] = useState<string | undefined>(undefined);
   const [isManualRefreshing, setIsManualRefreshing] = useState(false);
   const [refreshNotice, setRefreshNotice] = useState<string | null>(null);
+  const [readOnly, setReadOnly] = useState(true);
   const conversationCountRef = useRef(conversations.length);
   const composerRef = useRef<ComposerRef>(null);
   const refreshNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -52,6 +53,26 @@ export function Home() {
   // Load env presets on mount
   useEffect(() => {
     api.getEnvPresets().then(setEnvPresets).catch(() => { /* ignore */ });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    api.getAuthStatus()
+      .then((status) => {
+        if (!cancelled) {
+          setReadOnly(status.readOnly !== false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setReadOnly(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Get filter parameters based on active tab + selected directory
@@ -79,14 +100,21 @@ export function Home() {
       loadConversations(conversationCountRef.current, getFiltersForTab(activeTab, selectedDirectory, sourceFilter));
     }
     
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency array means this runs only on mount
+
+  useEffect(() => {
+    if (readOnly) {
+      return;
+    }
+
     // Focus the input after a brief delay to ensure DOM is ready
     const timer = setTimeout(() => {
       composerRef.current?.focusInput();
     }, 100);
     
     return () => clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty dependency array means this runs only on mount
+  }, [readOnly]);
 
   // Reload conversations when tab or directory changes
   useEffect(() => {
@@ -209,9 +237,10 @@ export function Home() {
                     </svg>
                   </div>
                 </div>
-                <h1 className="text-2xl font-semibold font-sans text-foreground">What is the next task?</h1>
+                <h1 className="text-2xl font-semibold font-sans text-foreground">{readOnly ? 'Conversations' : 'What is the next task?'}</h1>
               </div>
               
+              {!readOnly && (
               <div className="w-full">
                 <Composer 
                   ref={composerRef}
@@ -222,7 +251,7 @@ export function Home() {
                   showDirectorySelector={true}
                   allowAllDirectoriesOption={true}
                   showModelSelector={true}
-                  enableFileAutocomplete={true}
+                  enableFileAutocomplete={false}
                   recentDirectories={recentDirectories}
                   getMostRecentWorkingDirectory={getMostRecentWorkingDirectory}
                   onDirectoryChange={(directory) => {
@@ -242,20 +271,13 @@ export function Home() {
                   envPresets={envPresets}
                   selectedEnvPresetId={selectedEnvPresetId}
                   onEnvPresetChange={setSelectedEnvPresetId}
-                  onFetchFileSystem={async (directory) => {
-                    const response = await api.listDirectory({
-                      path: directory,
-                      recursive: true,
-                      respectGitignore: true,
-                    });
-                    return response.entries;
-                  }}
                   onFetchCommands={async (workingDirectory) => {
                     const response = await api.getCommands(workingDirectory);
                     return response.commands;
                   }}
                 />
               </div>
+              )}
 
               <TaskTabs 
                 activeTab={activeTab}

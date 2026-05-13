@@ -567,10 +567,21 @@ export class SessionInfoService {
    * Get conversations with filtering, sorting and pagination
    */
   async getConversations(query: ConversationListQuery): Promise<{ conversations: SessionInfo[]; total: number }> {
+    return this.getIndexedConversations(query, "session_id NOT LIKE 'codex:%'");
+  }
+
+  async getCodexConversations(query: ConversationListQuery): Promise<{ conversations: SessionInfo[]; total: number }> {
+    return this.getIndexedConversations(query, "session_id LIKE 'codex:%'");
+  }
+
+  private async getIndexedConversations(
+    query: ConversationListQuery,
+    providerPredicate: string
+  ): Promise<{ conversations: SessionInfo[]; total: number }> {
     try {
       let sql = `
         SELECT * FROM sessions
-        WHERE session_id NOT LIKE 'codex:%'
+        WHERE ${providerPredicate}
           AND NOT (
             summary IS NULL
             AND project_path IS NULL

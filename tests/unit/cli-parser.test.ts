@@ -13,4 +13,16 @@ describe('parseArgs', () => {
 
     expect(config.historyPollIntervalSeconds).toBe(15);
   });
+
+  it('parses read-only mode', () => {
+    const config = parseArgs(['node', 'server', '--read-only']);
+
+    expect(config.readOnly).toBe(true);
+  });
+
+  it('parses allow-write mode', () => {
+    const config = parseArgs(['node', 'server', '--allow-write']);
+
+    expect(config.readOnly).toBe(false);
+  });
 });

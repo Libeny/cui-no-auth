@@ -16,6 +16,8 @@ describe('Conversation Routes - Unified Start/Resume Endpoint', () => {
   let sessionInfoService: vi.Mocked<SessionInfoService>;
   let historyReader: vi.Mocked<ClaudeHistoryReader>;
   let conversationStatusManager: vi.Mocked<ConversationStatusManager>;
+  let statusTracker: vi.Mocked<ConversationStatusManager>;
+  let toolMetricsService: vi.Mocked<ToolMetricsService>;
 
   beforeEach(() => {
     app = express();
@@ -41,18 +43,16 @@ describe('Conversation Routes - Unified Start/Resume Endpoint', () => {
       registerActiveSession: vi.fn(),
     } as any;
 
-    const mockServices = {
-      statusTracker: {} as any,
-      toolMetricsService: {} as any,
-    };
+    statusTracker = {} as any;
+    toolMetricsService = {} as any;
 
     app.use('/api/conversations', createConversationRoutes(
       processManager,
       historyReader,
-      mockServices.statusTracker,
+      statusTracker,
       sessionInfoService,
       conversationStatusManager,
-      mockServices.toolMetricsService
+      toolMetricsService
     ));
     
     app.use((err: any, req: any, res: any, next: any) => {
@@ -61,6 +61,35 @@ describe('Conversation Routes - Unified Start/Resume Endpoint', () => {
   });
 
   describe('POST /api/conversations/start', () => {
+    it('should reject start requests when read-only mode is enabled', async () => {
+      const readOnlyApp = express();
+      readOnlyApp.use(express.json());
+      readOnlyApp.use('/api/conversations', createConversationRoutes(
+        processManager,
+        historyReader,
+        statusTracker,
+        sessionInfoService,
+        conversationStatusManager,
+        toolMetricsService,
+        undefined,
+        { readOnly: true }
+      ));
+      readOnlyApp.use((err: any, req: any, res: any, next: any) => {
+        res.status(err.statusCode || 500).json({ error: err.message });
+      });
+
+      const response = await request(readOnlyApp)
+        .post('/api/conversations/start')
+        .send({
+          workingDirectory: '/path/to/project',
+          initialPrompt: 'Hello Claude!'
+        });
+
+      expect(response.status).toBe(403);
+      expect(response.body.error).toContain('read-only mode');
+      expect(processManager.startConversation).not.toHaveBeenCalled();
+    });
+
     it('should start new conversation without resumedSessionId', async () => {
       const mockSystemInit = {
         type: 'system' as const,
