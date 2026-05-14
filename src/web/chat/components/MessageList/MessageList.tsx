@@ -1,9 +1,14 @@
 import React, { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { RefreshCw, MessageSquareText } from 'lucide-react';
+import { RefreshCw, MessageSquareText, Search, X } from 'lucide-react';
 import { MessageItem } from './MessageItem';
 import type { ChatMessage, ToolResult, SubagentSummary, BackgroundTaskSummary } from '../../types';
-import { buildConversationTurnOutline, type ConversationTurnOutlineItem } from '../../utils/usage-aggregation';
+import {
+  buildConversationTurnMembership,
+  buildConversationTurnOutline,
+  type ConversationTurnOutlineItem,
+} from '../../utils/usage-aggregation';
+import { fuzzyTextMatch } from '../../utils/fuzzy-search';
 import {
   Popover,
   PopoverContent,
@@ -59,6 +64,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   const [showUpdateHint, setShowUpdateHint] = useState(false);
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const pullStartYRef = useRef<number | null>(null);
   const isPullingRef = useRef(false);
   const noticeTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -373,11 +379,73 @@ export const MessageList: React.FC<MessageListProps> = ({
     return indexById;
   }, [virtualItems]);
 
+  const outlineItems = useMemo(
+    () => buildConversationTurnOutline(displayMessages),
+    [displayMessages]
+  );
+  const shouldShowOutline = showConversationOutline && outlineItems.length > 1;
+  const turnIdByMessageId = useMemo(
+    () => buildConversationTurnMembership(displayMessages, outlineItems),
+    [displayMessages, outlineItems]
+  );
+
+  const updateActiveTurnFromScroll = useCallback(() => {
+    if (!shouldShowOutline) {
+      setActiveTurnId(null);
+      return;
+    }
+
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+
+    const rows = virtualizer.getVirtualItems();
+    const viewportTop = container.scrollTop;
+    const viewportBottom = viewportTop + container.clientHeight;
+    const targetY = viewportTop + Math.min(container.clientHeight * 0.35, 280);
+    const visibleRows = rows.filter(row => row.end >= viewportTop && row.start <= viewportBottom);
+    const targetRow =
+      visibleRows.find(row => row.end >= targetY) ||
+      visibleRows.find(row => virtualItems[row.index]?.type === 'message') ||
+      rows.find(row => virtualItems[row.index]?.type === 'message');
+    const targetItem = targetRow ? virtualItems[targetRow.index] : undefined;
+    const nextTurnId = targetItem?.type === 'message'
+      ? turnIdByMessageId[targetItem.message.messageId] || null
+      : null;
+
+    setActiveTurnId(previous => previous === nextTurnId ? previous : nextTurnId);
+  }, [shouldShowOutline, turnIdByMessageId, virtualItems, virtualizer]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !shouldShowOutline) {
+      return;
+    }
+
+    const handleScroll = () => {
+      updateActiveTurnFromScroll();
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    updateActiveTurnFromScroll();
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [shouldShowOutline, updateActiveTurnFromScroll]);
+
+  useEffect(() => {
+    updateActiveTurnFromScroll();
+  }, [updateActiveTurnFromScroll, virtualRows]);
+
   const scrollToMessage = useCallback((messageId: string) => {
     const index = messageIndexById.get(messageId);
     if (index === undefined) {
       pendingScrollTargetRef.current = messageId;
       return;
+    }
+
+    const nextTurnId = turnIdByMessageId[messageId];
+    if (nextTurnId) {
+      setActiveTurnId(nextTurnId);
     }
 
     pendingScrollTargetRef.current = null;
@@ -420,7 +488,7 @@ export const MessageList: React.FC<MessageListProps> = ({
 
     virtualizer.scrollToIndex(index, { align: 'start', behavior: 'auto' });
     requestAnimationFrame(() => refineScroll(0));
-  }, [messageIndexById, virtualizer]);
+  }, [messageIndexById, turnIdByMessageId, virtualizer]);
 
   useEffect(() => {
     const pendingTarget = pendingScrollTargetRef.current;
@@ -428,12 +496,6 @@ export const MessageList: React.FC<MessageListProps> = ({
       scrollToMessage(pendingTarget);
     }
   }, [messageIndexById, scrollToMessage]);
-
-  const outlineItems = useMemo(
-    () => buildConversationTurnOutline(displayMessages),
-    [displayMessages]
-  );
-  const shouldShowOutline = showConversationOutline && outlineItems.length > 1;
 
   if (displayMessages.length === 0 && !isLoading) {
     return (
@@ -450,10 +512,21 @@ export const MessageList: React.FC<MessageListProps> = ({
   return (
     <div className="flex-1 min-h-0 bg-background relative flex">
       {shouldShowOutline ? (
-        <ConversationTurnsPopover items={outlineItems} onJumpToMessage={scrollToMessage} />
+        <>
+          <ConversationTurnsPanel
+            items={outlineItems}
+            activeTurnId={activeTurnId}
+            onJumpToMessage={scrollToMessage}
+          />
+          <ConversationTurnsMobilePopover
+            items={outlineItems}
+            activeTurnId={activeTurnId}
+            onJumpToMessage={scrollToMessage}
+          />
+        </>
       ) : null}
       <div
-        className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-background relative"
+        className="conversation-scrollbar flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-background relative"
         ref={containerRef}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
@@ -575,7 +648,11 @@ export const MessageList: React.FC<MessageListProps> = ({
                 id={getMessageElementId(item.message.messageId)}
                 data-index={virtualRow.index}
                 ref={virtualizer.measureElement}
-                className="flex flex-col gap-2 px-4 py-1 max-w-3xl mx-auto w-full box-border"
+                className={`flex flex-col gap-2 px-4 py-1 max-w-3xl mx-auto w-full box-border rounded-lg transition-colors ${
+                  activeTurnId && turnIdByMessageId[item.message.messageId] === activeTurnId
+                    ? 'bg-blue-500/[0.035] ring-1 ring-blue-500/10'
+                    : ''
+                }`}
               >
                 <MessageItem
                   message={item.message}
@@ -603,24 +680,45 @@ export const MessageList: React.FC<MessageListProps> = ({
   );
 };
 
-function ConversationTurnsPopover({
+function ConversationTurnsPanel({
   items,
+  activeTurnId,
   onJumpToMessage,
 }: {
   items: ConversationTurnOutlineItem[];
+  activeTurnId: string | null;
+  onJumpToMessage: (messageId: string) => void;
+}) {
+  return (
+    <aside
+      className="pointer-events-none fixed left-0 top-20 bottom-28 z-20 hidden overflow-hidden px-3 xl:block"
+      style={{ width: 'max(0px, calc((100vw - 48rem) / 2))' }}
+      aria-label="Turns navigation"
+    >
+      <div className="pointer-events-auto flex h-full min-w-0 flex-col rounded-lg border border-border/70 bg-background/95 p-2 shadow-sm backdrop-blur-sm">
+        <ConversationTurnsList
+          items={items}
+          activeTurnId={activeTurnId}
+          onJumpToMessage={onJumpToMessage}
+        />
+      </div>
+    </aside>
+  );
+}
+
+function ConversationTurnsMobilePopover({
+  items,
+  activeTurnId,
+  onJumpToMessage,
+}: {
+  items: ConversationTurnOutlineItem[];
+  activeTurnId: string | null;
   onJumpToMessage: (messageId: string) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const handleJump = (messageId: string) => {
-    setIsOpen(false);
-    onJumpToMessage(messageId);
-  };
 
   return (
-    <div
-      className="pointer-events-none fixed left-0 top-20 bottom-56 z-30 hidden overflow-hidden px-3 xl:block"
-      style={{ width: 'max(0px, calc((100vw - 48rem) / 2))' }}
-    >
+    <div className="pointer-events-none fixed left-0 top-20 z-30 px-3 xl:hidden">
       <Popover open={isOpen} onOpenChange={setIsOpen}>
         <PopoverTrigger asChild>
           <button
@@ -637,60 +735,149 @@ function ConversationTurnsPopover({
         <PopoverContent
           align="start"
           sideOffset={8}
-          collisionPadding={{ top: 80, right: 16, bottom: 224, left: 16 }}
-          className="pointer-events-auto min-w-0 overscroll-contain overflow-y-auto overflow-x-hidden p-2 rounded-lg"
-          style={{
-            width: 'min(420px, calc((100vw - 48rem) / 2 - 1.5rem))',
-            maxWidth: 'calc(100vw - 2rem)',
-            maxHeight: 'min(var(--radix-popover-content-available-height), calc(100vh - 22rem))',
-          }}
+          collisionPadding={16}
+          className="pointer-events-auto flex max-h-[min(var(--radix-popover-content-available-height),70vh)] w-[min(360px,calc(100vw-2rem))] flex-col overflow-hidden p-2 rounded-lg"
         >
-          <div className="mb-2 flex items-center justify-between px-1 text-xs font-mono text-muted-foreground">
-            <span>Turns</span>
-            <span>{items.length}</span>
-          </div>
-          <div className="grid gap-2">
-            {items.map((item) => (
-              <section key={item.id} className="min-w-0 border-t border-border/60 pt-2 first:border-t-0">
-                <div className="mb-2 flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
-                  <span className="h-px flex-1 bg-border/60" />
-                  <span>Turn {item.index}</span>
-                  <span className="h-px flex-1 bg-border/60" />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleJump(item.userMessageId)}
-                  className="group flex w-full min-w-0 justify-end text-left"
-                  title={item.prompt}
-                >
-                  <div className="min-w-0 max-w-[88%] overflow-hidden rounded-md border border-border/70 bg-card px-2 py-1.5 text-right transition-colors group-hover:bg-muted">
-                    <div className="mb-1 font-mono text-[10px] text-muted-foreground">User</div>
-                    <div className="line-clamp-3 overflow-hidden break-all text-xs text-card-foreground [overflow-wrap:anywhere]">
-                      {item.prompt}
-                    </div>
-                  </div>
-                </button>
-                {item.responseMessageId ? (
-                  <button
-                    type="button"
-                    onClick={() => handleJump(item.responseMessageId!)}
-                    className="group mt-1.5 flex w-full min-w-0 justify-start text-left"
-                    title={item.response || 'No final text'}
-                  >
-                    <div className="min-w-0 max-w-[88%] overflow-hidden rounded-md border border-border/60 bg-background px-2 py-1.5 transition-colors group-hover:bg-muted">
-                      <div className="mb-1 font-mono text-[10px] text-muted-foreground">Response</div>
-                      <div className="line-clamp-3 overflow-hidden break-all text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                        {item.response || 'No final text'}
-                      </div>
-                    </div>
-                  </button>
-                ) : null}
-              </section>
-            ))}
-          </div>
+          <ConversationTurnsList
+            items={items}
+            activeTurnId={activeTurnId}
+            onJumpToMessage={onJumpToMessage}
+          />
         </PopoverContent>
       </Popover>
     </div>
+  );
+}
+
+function ConversationTurnsList({
+  items,
+  activeTurnId,
+  onJumpToMessage,
+}: {
+  items: ConversationTurnOutlineItem[];
+  activeTurnId: string | null;
+  onJumpToMessage: (messageId: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const activeItemRef = useRef<HTMLElement | null>(null);
+  const filteredItems = useMemo(() => {
+    const searchText = query.trim();
+    if (!searchText) {
+      return items;
+    }
+
+    return items.filter(item => fuzzyTextMatch(`${item.prompt}\n${item.response}`, searchText));
+  }, [items, query]);
+
+  useEffect(() => {
+    if (!activeTurnId || !activeItemRef.current) {
+      return;
+    }
+
+    activeItemRef.current.scrollIntoView({ block: 'nearest' });
+  }, [activeTurnId, filteredItems]);
+
+  const handleJump = (messageId: string) => {
+    onJumpToMessage(messageId);
+  };
+
+  return (
+    <>
+      <div className="mb-2 flex items-center justify-between px-1 text-xs font-mono text-muted-foreground">
+        <span>Turns</span>
+        <span>{query.trim() ? `${filteredItems.length}/${items.length}` : items.length}</span>
+      </div>
+      <div className="mb-2 flex items-center gap-1 rounded-md border border-border/70 bg-background px-2 py-1.5">
+        <Search size={13} className="shrink-0 text-muted-foreground" />
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search prompt / response"
+          className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+          aria-label="搜索 Turns"
+        />
+        {query ? (
+          <button
+            type="button"
+            onClick={() => setQuery('')}
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            aria-label="清空 Turns 搜索"
+            title="清空"
+          >
+            <X size={12} />
+          </button>
+        ) : null}
+      </div>
+      {filteredItems.length > 0 ? (
+        <div className="turns-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+          <div className="grid gap-2">
+            {filteredItems.map((item) => {
+              const isActive = item.id === activeTurnId;
+
+              return (
+                <section
+                  key={item.id}
+                  ref={isActive ? activeItemRef : undefined}
+                  aria-current={isActive ? 'true' : undefined}
+                  className={`min-w-0 rounded-md border p-2 transition-colors ${
+                    isActive
+                      ? 'border-blue-500/45 bg-blue-500/[0.06] shadow-sm'
+                      : 'border-border/60 bg-background/70'
+                  }`}
+                >
+                  <div className="mb-2 flex items-center gap-2 font-mono text-[10px] text-muted-foreground">
+                    <span className={`h-1.5 w-1.5 rounded-full ${isActive ? 'bg-blue-500' : 'bg-border'}`} />
+                    <span>Turn {item.index}</span>
+                    <span className="h-px flex-1 bg-border/60" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleJump(item.userMessageId)}
+                    className="group flex w-full min-w-0 justify-end text-left"
+                    title={item.prompt}
+                  >
+                    <div className={`min-w-0 max-w-[90%] overflow-hidden rounded-md border px-2 py-1.5 text-right transition-colors ${
+                      isActive
+                        ? 'border-blue-500/35 bg-blue-500/[0.08]'
+                        : 'border-border/70 bg-card group-hover:bg-muted'
+                    }`}>
+                      <div className="mb-1 font-mono text-[10px] text-muted-foreground">User</div>
+                      <div className="line-clamp-3 overflow-hidden break-all text-xs text-card-foreground [overflow-wrap:anywhere]">
+                        {item.prompt}
+                      </div>
+                    </div>
+                  </button>
+                  {item.responseMessageId ? (
+                    <button
+                      type="button"
+                      onClick={() => handleJump(item.responseMessageId!)}
+                      className="group mt-1.5 flex w-full min-w-0 justify-start text-left"
+                      title={item.response || 'No final text'}
+                    >
+                      <div className={`min-w-0 max-w-[90%] overflow-hidden rounded-md border px-2 py-1.5 transition-colors ${
+                        isActive
+                          ? 'border-blue-500/25 bg-background'
+                          : 'border-border/60 bg-background group-hover:bg-muted'
+                      }`}>
+                        <div className="mb-1 font-mono text-[10px] text-muted-foreground">Response</div>
+                        <div className="line-clamp-3 overflow-hidden break-all text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                          {item.response || 'No final text'}
+                        </div>
+                      </div>
+                    </button>
+                  ) : null}
+                </section>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-md border border-dashed border-border/70 px-3 py-6 text-center text-xs text-muted-foreground">
+          No matching turns
+        </div>
+      )}
+    </>
   );
 }
 

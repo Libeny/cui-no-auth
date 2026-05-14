@@ -155,6 +155,28 @@ export function buildConversationTurnOutline(messages: ChatMessage[]): Conversat
   return items;
 }
 
+export function buildConversationTurnMembership(
+  messages: ChatMessage[],
+  outlineItems: ConversationTurnOutlineItem[]
+): Record<string, string> {
+  const turnByUserMessageId = new Map(outlineItems.map(item => [item.userMessageId, item.id]));
+  const membership: Record<string, string> = {};
+  let activeTurnId: string | undefined;
+
+  for (const message of messages) {
+    const nextTurnId = turnByUserMessageId.get(message.messageId);
+    if (nextTurnId) {
+      activeTurnId = nextTurnId;
+    }
+
+    if (activeTurnId) {
+      membership[message.messageId] = activeTurnId;
+    }
+  }
+
+  return membership;
+}
+
 export function buildUniqueTokenUsageSummary(messages: ChatMessage[]): TokenUsageSummary | undefined {
   const accumulator = createAccumulator();
   const seenUsageKeys = new Set<string>();

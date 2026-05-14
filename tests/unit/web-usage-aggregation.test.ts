@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { annotateMessagesWithUsagePresentation, buildConversationTurnOutline } from '@/web/chat/utils/usage-aggregation';
+import {
+  annotateMessagesWithUsagePresentation,
+  buildConversationTurnMembership,
+  buildConversationTurnOutline,
+} from '@/web/chat/utils/usage-aggregation';
 import type { ChatMessage, TokenUsage } from '@/web/chat/types';
 
 const usage = (
@@ -147,5 +151,26 @@ describe('usage aggregation presentation', () => {
         response: '第二轮回复',
       },
     ]);
+  });
+
+  it('maps every visible message to the active user turn for scroll synchronization', () => {
+    const messages = [
+      message({ id: 'system-before', type: 'system', content: 'system note' }),
+      message({ id: 'user-1', type: 'user', content: '第一轮问题' }),
+      message({ id: 'assistant-tool', type: 'assistant', content: '第一轮工具调用' }),
+      message({ id: 'assistant-final', type: 'assistant', content: '第一轮最终回复' }),
+      message({ id: 'user-2', type: 'user', content: '第二轮问题' }),
+      message({ id: 'assistant-2', type: 'assistant', content: '第二轮回复' }),
+    ];
+
+    const outline = buildConversationTurnOutline(messages);
+
+    expect(buildConversationTurnMembership(messages, outline)).toEqual({
+      'user-1': 'turn-user-1',
+      'assistant-tool': 'turn-user-1',
+      'assistant-final': 'turn-user-1',
+      'user-2': 'turn-user-2',
+      'assistant-2': 'turn-user-2',
+    });
   });
 });
