@@ -9,6 +9,9 @@ import { Checkbox } from '@/web/chat/components/ui/checkbox';
 import { Label } from '@/web/chat/components/ui/label';
 import { cn } from '@/web/chat/lib/utils';
 
+const JSON_VIEWER_SCRIPT_ID = 'json-viewer-script';
+const JSON_VIEWER_SCRIPT_URL = 'https://unpkg.com/@alenaksu/json-viewer@2.1.0/dist/json-viewer.bundle.js';
+
 declare global {
   namespace JSX {
     interface IntrinsicElements {
@@ -85,6 +88,18 @@ function InspectorApp() {
   // Working directories state
   const [workingDirectories, setWorkingDirectories] = useState<any[]>([]);
   const [streamResult, setStreamResult] = useState<JSX.Element[]>([]);
+
+  useEffect(() => {
+    if (document.getElementById(JSON_VIEWER_SCRIPT_ID)) {
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.id = JSON_VIEWER_SCRIPT_ID;
+    script.src = JSON_VIEWER_SCRIPT_URL;
+    script.async = true;
+    document.head.appendChild(script);
+  }, []);
   
   // Commands state
   const [commandsWorkingDirectory, setCommandsWorkingDirectory] = useState('');

@@ -228,7 +228,7 @@ export interface SubagentDetailsResponse {
   };
 }
 
-export type BackgroundTaskStatus = 'running' | 'completed' | 'failed' | 'unknown';
+export type BackgroundTaskStatus = 'running' | 'completed' | 'failed' | 'stopped' | 'unknown';
 
 export interface BackgroundTaskSummary {
   taskId: string;

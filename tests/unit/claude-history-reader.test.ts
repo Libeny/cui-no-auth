@@ -733,6 +733,196 @@ snapshot output
       expect(details.task.outputFileExists).toBe(false);
       expect(details.task.status).toBe('completed');
     });
+
+    it('should mark a background task as stopped when TaskStop succeeds', async () => {
+      const sessionId = 'stopped-session';
+      const taskId = 'bstop';
+      const projectDir = path.join(tempDir, 'projects', '-Users-username-stopped');
+      await fs.mkdir(projectDir, { recursive: true });
+      const sessionFile = path.join(projectDir, `${sessionId}.jsonl`);
+      const outputPath = `/private/tmp/claude-501/-Users-username-stopped/${sessionId}/tasks/${taskId}.output`;
+
+      const entries = [
+        {
+          type: 'user',
+          sessionId,
+          uuid: 'launch-result',
+          timestamp: '2026-05-08T01:00:01.000Z',
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_bash',
+                content: `Command running in background with ID: ${taskId}. Output is being written to: ${outputPath}`,
+                is_error: false,
+              },
+            ],
+          },
+          toolUseResult: {
+            backgroundTaskId: taskId,
+          },
+        },
+        {
+          type: 'user',
+          sessionId,
+          uuid: 'output-result',
+          timestamp: '2026-05-08T01:05:01.000Z',
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_output',
+                content: `<retrieval_status>timeout</retrieval_status>
+<task_id>${taskId}</task_id>
+<task_type>local_bash</task_type>
+<status>running</status>
+<output>
+partial output
+</output>`,
+                is_error: false,
+              },
+            ],
+          },
+          toolUseResult: {
+            retrieval_status: 'timeout',
+            task: {
+              task_id: taskId,
+              task_type: 'local_bash',
+              status: 'running',
+              output: 'partial output\n',
+              exitCode: null,
+            },
+          },
+        },
+        {
+          type: 'assistant',
+          sessionId,
+          uuid: 'assistant-stop',
+          timestamp: '2026-05-08T01:05:10.000Z',
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'toolu_stop',
+                name: 'TaskStop',
+                input: {
+                  task_id: taskId,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          sessionId,
+          uuid: 'stop-result',
+          timestamp: '2026-05-08T01:05:11.000Z',
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_stop',
+                content: `{"message":"Successfully stopped task: ${taskId}","task_id":"${taskId}","task_type":"local_bash"}`,
+                is_error: false,
+              },
+            ],
+          },
+          toolUseResult: {
+            message: `Successfully stopped task: ${taskId}`,
+            task_id: taskId,
+            task_type: 'local_bash',
+          },
+        },
+      ];
+
+      await fs.writeFile(sessionFile, entries.map((entry) => JSON.stringify(entry)).join('\n'));
+
+      reader = new ClaudeHistoryReader();
+      (reader as any).claudeHomePath = tempDir;
+
+      const details = await (reader as any).fetchBackgroundTask(sessionId, taskId);
+
+      expect(details.task.status).toBe('stopped');
+      expect(details.task.completedAt).toBe('2026-05-08T01:05:11.000Z');
+      expect(details.outputSource).toBe('snapshot');
+      expect(details.output).toBe('partial output\n');
+    });
+
+    it('should use a later Read result of the output file as task output history', async () => {
+      const sessionId = 'read-output-session';
+      const taskId = 'bread';
+      const projectDir = path.join(tempDir, 'projects', '-Users-username-read-output');
+      await fs.mkdir(projectDir, { recursive: true });
+      const sessionFile = path.join(projectDir, `${sessionId}.jsonl`);
+      const outputPath = `/private/tmp/claude-501/-Users-username-read-output/${sessionId}/tasks/${taskId}.output`;
+
+      const entries = [
+        {
+          type: 'queue-operation',
+          operation: 'enqueue',
+          sessionId,
+          timestamp: '2026-05-08T01:00:04.000Z',
+          content: `<task-notification>
+<task-id>${taskId}</task-id>
+<tool-use-id>toolu_bash</tool-use-id>
+<output-file>${outputPath}</output-file>
+<status>completed</status>
+<summary>Background command "Codex Task" completed (exit code 0)</summary>
+</task-notification>`,
+        },
+        {
+          type: 'assistant',
+          sessionId,
+          uuid: 'assistant-read',
+          timestamp: '2026-05-08T01:00:05.000Z',
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'toolu_read',
+                name: 'Read',
+                input: {
+                  file_path: outputPath,
+                },
+              },
+            ],
+          },
+        },
+        {
+          type: 'user',
+          sessionId,
+          uuid: 'read-result',
+          timestamp: '2026-05-08T01:00:06.000Z',
+          message: {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_read',
+                content: '1\tfirst line\n2\tsecond line\n',
+                is_error: false,
+              },
+            ],
+          },
+        },
+      ];
+
+      await fs.writeFile(sessionFile, entries.map((entry) => JSON.stringify(entry)).join('\n'));
+
+      reader = new ClaudeHistoryReader();
+      (reader as any).claudeHomePath = tempDir;
+
+      const details = await (reader as any).fetchBackgroundTask(sessionId, taskId);
+
+      expect(details.task.status).toBe('completed');
+      expect(details.outputSource).toBe('snapshot');
+      expect(details.output).toBe('first line\nsecond line');
+    });
   });
 
   describe('fetchConversation', () => {

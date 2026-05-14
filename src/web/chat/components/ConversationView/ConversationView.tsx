@@ -58,9 +58,10 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   // activeSessionIdRef is no longer strictly needed for race conditions due to key={sessionId}, 
   // but kept for safety in async callbacks
   const activeSessionIdRef = useRef<string | null>(sessionId || null);
-  const providerHint = (location.state as { provider?: string } | null)?.provider === 'codex' || sessionId?.startsWith(CODEX_SESSION_PREFIX) || false;
+  const hasCodexPrefix = sessionId?.startsWith(CODEX_SESSION_PREFIX) || false;
+  const providerHint = (location.state as { provider?: string } | null)?.provider === 'codex' || hasCodexPrefix;
   const [resolvedProvider, setResolvedProvider] = useState<'claude' | 'codex' | null>(providerHint ? 'codex' : null);
-  const isCodexSession = resolvedProvider === 'codex' || providerHint;
+  const isCodexSession = resolvedProvider === 'codex' || (resolvedProvider === null && providerHint);
 
   // Use shared conversation messages hook
   const {
@@ -175,6 +176,9 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
         if (provider === 'claude' && isNotFoundError(detailsError)) {
           provider = 'codex';
           details = await api.getCodexConversationDetails(toCodexSessionId(sessionId));
+        } else if (provider === 'codex' && !hasCodexPrefix && isNotFoundError(detailsError)) {
+          provider = 'claude';
+          details = await api.getConversationDetails(sessionId);
         } else {
           throw detailsError;
         }

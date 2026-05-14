@@ -486,6 +486,7 @@ export class ClaudeHistoryReader {
     const entries = await this.parseJsonlFile(sessionFilePath);
     const taskMap = new Map<string, MutableBackgroundTask>();
     const descriptionByToolUseId = new Map<string, string>();
+    const outputFileReadByToolUseId = new Map<string, string>();
 
     for (const entry of entries) {
       if (entry.sessionId && entry.sessionId !== sessionId) continue;
@@ -495,6 +496,7 @@ export class ClaudeHistoryReader {
         const toolName = this.getString(toolUse.name);
         const input = this.asRecord(toolUse.input);
         const description = this.getString(input?.description);
+        const readFilePath = this.getString(input?.file_path) || this.getString(input?.filePath);
 
         if (toolUseId && description) {
           descriptionByToolUseId.set(toolUseId, description);
@@ -503,6 +505,10 @@ export class ClaudeHistoryReader {
               task.description = description;
             }
           }
+        }
+
+        if (toolUseId && toolName === 'Read' && readFilePath && path.basename(readFilePath).endsWith('.output')) {
+          outputFileReadByToolUseId.set(toolUseId, readFilePath);
         }
 
         if (toolName === 'TaskOutput') {
@@ -519,6 +525,9 @@ export class ClaudeHistoryReader {
         this.applyBackgroundLaunchPayload(taskMap, sessionId, payload.text, payload.toolUseId, entry.timestamp, descriptionByToolUseId);
         this.applyTaskOutputPayload(taskMap, sessionId, payload.text, entry.timestamp);
         this.applyTaskNotificationPayload(taskMap, sessionId, payload.text, entry.timestamp, descriptionByToolUseId);
+        if (!payload.isError) {
+          this.applyOutputFileReadPayload(taskMap, sessionId, payload.text, payload.toolUseId, entry.timestamp, outputFileReadByToolUseId);
+        }
       }
 
       this.applyStructuredToolUseResult(taskMap, sessionId, entry, descriptionByToolUseId);
@@ -691,6 +700,20 @@ export class ClaudeHistoryReader {
       this.updateBackgroundTaskTimestamp(task, entry.timestamp);
     }
 
+    const topLevelTaskId = this.getString(result.task_id) || this.getString(result.taskId);
+    const message = this.getString(result.message);
+    if (topLevelTaskId && message && /successfully stopped task/i.test(message)) {
+      const task = this.ensureBackgroundTask(taskMap, sessionId, topLevelTaskId);
+      const taskType = this.getString(result.task_type) || this.getString(result.taskType);
+      task.status = 'stopped';
+      task.completedAt = entry.timestamp;
+      task.summary = message;
+      if (taskType) {
+        task.taskType = taskType;
+      }
+      this.updateBackgroundTaskTimestamp(task, entry.timestamp);
+    }
+
     const taskResult = this.asRecord(result.task);
     const taskId = this.getString(taskResult?.task_id) || this.getString(taskResult?.taskId);
     if (!taskId) return;
@@ -728,14 +751,43 @@ export class ClaudeHistoryReader {
     this.updateBackgroundTaskTimestamp(task, entry.timestamp);
   }
 
+  private applyOutputFileReadPayload(
+    taskMap: Map<string, MutableBackgroundTask>,
+    sessionId: string,
+    text: string,
+    toolUseId: string | undefined,
+    timestamp: string | undefined,
+    outputFileReadByToolUseId: Map<string, string>,
+  ): void {
+    if (!toolUseId) return;
+
+    const outputFile = outputFileReadByToolUseId.get(toolUseId);
+    if (!outputFile || !path.basename(outputFile).endsWith('.output')) return;
+
+    const taskId = path.basename(outputFile, '.output');
+    if (!taskId) return;
+
+    const task = this.ensureBackgroundTask(taskMap, sessionId, taskId);
+    task.outputFile = task.outputFile || outputFile;
+    task.outputFileCandidates.add(outputFile);
+
+    const output = this.normalizeReadToolOutput(text);
+    if (output) {
+      task.outputSnapshot = output;
+      task.outputPreview = this.truncatePreview(output);
+    }
+
+    this.updateBackgroundTaskTimestamp(task, timestamp);
+  }
+
   private extractToolUseBlocks(entry: RawJsonEntry): any[] {
     const content = this.getMessageContent(entry);
     if (!Array.isArray(content)) return [];
     return content.filter((block: any) => block?.type === 'tool_use');
   }
 
-  private extractEntryTextPayloads(entry: RawJsonEntry): Array<{ text: string; toolUseId?: string }> {
-    const payloads: Array<{ text: string; toolUseId?: string }> = [];
+  private extractEntryTextPayloads(entry: RawJsonEntry): Array<{ text: string; toolUseId?: string; isError?: boolean }> {
+    const payloads: Array<{ text: string; toolUseId?: string; isError?: boolean }> = [];
     const content = this.getMessageContent(entry);
 
     if (typeof content === 'string') {
@@ -743,20 +795,21 @@ export class ClaudeHistoryReader {
     } else if (Array.isArray(content)) {
       for (const block of content as any[]) {
         const toolUseId = this.getString(block?.tool_use_id);
+        const isError = block?.is_error === true;
         if (typeof block?.content === 'string') {
-          payloads.push({ text: block.content, toolUseId });
+          payloads.push({ text: block.content, toolUseId, isError });
         } else if (Array.isArray(block?.content)) {
           for (const child of block.content) {
             const text = this.getString(child?.text) || this.getString(child?.content);
             if (text) {
-              payloads.push({ text, toolUseId });
+              payloads.push({ text, toolUseId, isError });
             }
           }
         }
 
         const blockText = this.getString(block?.text);
         if (blockText) {
-          payloads.push({ text: blockText, toolUseId });
+          payloads.push({ text: blockText, toolUseId, isError });
         }
       }
     }
@@ -820,7 +873,10 @@ export class ClaudeHistoryReader {
     if (normalized === 'completed' || normalized === 'success') {
       return exitCode !== undefined && exitCode !== 0 ? 'failed' : 'completed';
     }
-    if (normalized === 'failed' || normalized === 'error' || normalized === 'cancelled' || normalized === 'canceled') {
+    if (normalized === 'stopped' || normalized === 'cancelled' || normalized === 'canceled') {
+      return 'stopped';
+    }
+    if (normalized === 'failed' || normalized === 'error') {
       return 'failed';
     }
     return 'unknown';
@@ -970,6 +1026,18 @@ export class ClaudeHistoryReader {
 
   private trimOuterNewline(value: string): string {
     return value.replace(/^\n/, '').replace(/\n$/, '');
+  }
+
+  private normalizeReadToolOutput(value: string): string {
+    const trimmed = this.trimOuterNewline(value);
+    const lines = trimmed.split(/\r?\n/);
+    const numberedLineCount = lines.filter((line) => /^\s*\d+\t/.test(line)).length;
+
+    if (numberedLineCount > 0 && numberedLineCount >= Math.ceil(lines.length * 0.6)) {
+      return lines.map((line) => line.replace(/^\s*\d+\t/, '')).join('\n');
+    }
+
+    return trimmed;
   }
 
   private truncatePreview(value: string): string {

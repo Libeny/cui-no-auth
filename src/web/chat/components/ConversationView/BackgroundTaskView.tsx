@@ -136,6 +136,7 @@ function getStatusText(task: BackgroundTaskSummary): string {
   if (task.status === 'running') return '运行中';
   if (task.status === 'completed') return task.exitCode !== undefined ? `已完成 (${task.exitCode})` : '已完成';
   if (task.status === 'failed') return task.exitCode !== undefined ? `失败 (${task.exitCode})` : '失败';
+  if (task.status === 'stopped') return '已停止';
   return '状态未知';
 }
 
