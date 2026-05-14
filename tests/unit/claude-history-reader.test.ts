@@ -83,6 +83,63 @@ describe('ClaudeHistoryReader', () => {
     });
   });
 
+  describe('sub-agent history', () => {
+    it('should list and fetch sub-agent details even when the main session file is missing', async () => {
+      const sessionId = 'orphaned-session';
+      const subagentId = 'agent-a123';
+      const subagentDir = path.join(tempDir, 'projects', '-Users-example-project', sessionId, 'subagents');
+      await fs.mkdir(subagentDir, { recursive: true });
+
+      await fs.writeFile(
+        path.join(subagentDir, `${subagentId}.jsonl`),
+        [
+          JSON.stringify({
+            parentUuid: null,
+            type: 'user',
+            sessionId,
+            uuid: 'sub-user',
+            timestamp: '2026-05-14T01:00:00.000Z',
+            message: { role: 'user', content: 'Investigate offline details' },
+          }),
+          JSON.stringify({
+            parentUuid: 'sub-user',
+            type: 'assistant',
+            sessionId,
+            uuid: 'sub-assistant',
+            timestamp: '2026-05-14T01:00:01.000Z',
+            durationMs: 250,
+            message: {
+              role: 'assistant',
+              model: 'claude-sonnet-4-5',
+              content: 'Done',
+            },
+          }),
+        ].join('\n')
+      );
+
+      reader = new ClaudeHistoryReader();
+      (reader as any).claudeHomePath = tempDir;
+
+      const subagents = await reader.listSubagents(sessionId);
+      expect(subagents).toEqual([
+        expect.objectContaining({
+          subagentId,
+          sessionId,
+          messageCount: 2,
+          summary: 'Investigate offline details',
+        }),
+      ]);
+
+      const details = await reader.fetchSubagentConversation(sessionId, subagentId);
+      expect(details.subagent.subagentId).toBe(subagentId);
+      expect(details.messages.map((message) => message.uuid)).toEqual(['sub-user', 'sub-assistant']);
+      expect(details.metadata).toEqual({
+        totalDuration: 250,
+        model: 'claude-sonnet-4-5',
+      });
+    });
+  });
+
   describe('listConversations', () => {
     it('should return empty result when projects directory does not exist', async () => {
       // Remove the projects directory

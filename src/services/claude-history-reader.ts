@@ -180,11 +180,14 @@ export class ClaudeHistoryReader {
 
   async listSubagents(sessionId: string): Promise<SubagentSummary[]> {
     const sessionFilePath = await this.locateMainSessionFile(sessionId);
-    if (!sessionFilePath) {
+    const files = sessionFilePath
+      ? await this.findSubagentFiles(sessionFilePath, sessionId)
+      : await this.findSubagentFilesBySessionId(sessionId);
+
+    if (!sessionFilePath && files.length === 0) {
       throw new CUIError('CONVERSATION_NOT_FOUND', `Conversation ${sessionId} not found`, 404);
     }
 
-    const files = await this.findSubagentFiles(sessionFilePath, sessionId);
     if (files.length === 0) {
       return [];
     }
@@ -228,11 +231,14 @@ export class ClaudeHistoryReader {
 
   async fetchSubagentConversation(sessionId: string, subagentId: string): Promise<SubagentDetailsResponse> {
     const sessionFilePath = await this.locateMainSessionFile(sessionId);
-    if (!sessionFilePath) {
+    const subagentFilePath = sessionFilePath
+      ? await this.findSubagentFile(sessionFilePath, sessionId, subagentId)
+      : await this.findSubagentFileBySessionId(sessionId, subagentId);
+
+    if (!sessionFilePath && !subagentFilePath) {
       throw new CUIError('CONVERSATION_NOT_FOUND', `Conversation ${sessionId} not found`, 404);
     }
 
-    const subagentFilePath = await this.findSubagentFile(sessionFilePath, sessionId, subagentId);
     if (!subagentFilePath) {
       throw new CUIError('SUBAGENT_NOT_FOUND', `Sub-agent ${subagentId} not found`, 404);
     }
@@ -415,6 +421,51 @@ export class ClaudeHistoryReader {
 
   private async findSubagentFile(sessionFilePath: string, sessionId: string, subagentId: string): Promise<string | null> {
     const files = await this.findSubagentFiles(sessionFilePath, sessionId);
+    return files.find((filePath) => path.basename(filePath, '.jsonl') === subagentId) || null;
+  }
+
+  private async findSubagentFilesBySessionId(sessionId: string): Promise<string[]> {
+    const projectsDir = path.join(this.claudeHomePath, 'projects');
+    const candidates = new Set<string>();
+
+    try {
+      const projectEntries = await fs.readdir(projectsDir, { withFileTypes: true });
+      for (const projectEntry of projectEntries) {
+        if (!projectEntry.isDirectory()) continue;
+
+        const projectDir = path.join(projectsDir, projectEntry.name);
+        const candidateDirs = [
+          path.join(projectDir, sessionId, 'subagents'),
+          path.join(projectDir, sessionId),
+        ];
+
+        for (const candidateDir of candidateDirs) {
+          try {
+            const entries = await fs.readdir(candidateDir);
+            entries
+              .filter((entry) => entry.startsWith('agent-') && entry.endsWith('.jsonl'))
+              .forEach((entry) => candidates.add(path.join(candidateDir, entry)));
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } catch {
+      return [];
+    }
+
+    const matches: string[] = [];
+    for (const candidate of candidates) {
+      if (await this.subagentFileBelongsToSession(candidate, sessionId)) {
+        matches.push(candidate);
+      }
+    }
+
+    return matches.sort();
+  }
+
+  private async findSubagentFileBySessionId(sessionId: string, subagentId: string): Promise<string | null> {
+    const files = await this.findSubagentFilesBySessionId(sessionId);
     return files.find((filePath) => path.basename(filePath, '.jsonl') === subagentId) || null;
   }
 
