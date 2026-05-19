@@ -3,7 +3,6 @@ import * as fsPromises from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as readline from 'readline';
-import { diffLines } from 'diff';
 import { createLogger, type Logger } from './logger.js';
 import { SessionInfoService } from './session-info-service.js';
 import type { ConversationSummary, SessionInfo } from '../types/index.js';
@@ -33,13 +32,7 @@ type TextContentBlock = {
   text: string;
 };
 
-type ToolUseContentBlock = {
-  type: 'tool_use';
-  name: string;
-  input?: Record<string, unknown>;
-};
-
-type MessageContentBlock = TextContentBlock | ToolUseContentBlock | { type: string };
+type MessageContentBlock = TextContentBlock | { type: string };
 
 type HistoryEntryMessage = {
   model?: string;
@@ -53,6 +46,7 @@ type HistoryEntry = {
   isSidechain?: boolean;
   durationMs?: number;
   message?: string | HistoryEntryMessage;
+  summary?: string;
 };
 
 type ChangedSessionFile = {
@@ -323,21 +317,40 @@ export class HistoryIndexer {
         crlfDelay: Infinity
       });
 
-      let messageCount = 0;
-      let totalDuration = 0;
       let model = 'Unknown';
       let summary = '';
       let projectPath = '';
       let firstTimestamp = '';
-      let lastTimestamp = '';
       let foundModel = false;
       let firstUserMessage = '';
+      let sawConversationEntry = false;
+      let settled = false;
 
-      // Tool metrics
-      let linesAdded = 0;
-      let linesRemoved = 0;
-      let editCount = 0;
-      let writeCount = 0;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+
+        const fallbackTime = new Date(mtime).toISOString();
+        const summaryText = summary || this.truncateSummary(firstUserMessage);
+        if (!summaryText && !sawConversationEntry) {
+          resolve(null);
+          return;
+        }
+
+        resolve({
+          sessionId,
+          summary: summaryText || undefined,
+          projectPath: projectPath || undefined,
+          messageCount: 0,
+          totalDuration: 0,
+          model,
+          createdAt: firstTimestamp || fallbackTime,
+          updatedAt: fallbackTime,
+          lastScannedAt: mtime,
+          filePath,
+          fileSize,
+        });
+      };
 
       rl.on('line', (line) => {
         try {
@@ -354,21 +367,20 @@ export class HistoryIndexer {
           // Capture timestamps
           if (entry.timestamp) {
             if (!firstTimestamp) firstTimestamp = entry.timestamp;
-            lastTimestamp = entry.timestamp;
           }
 
           // Capture cwd/projectPath from ANY entry that has it
           if (!projectPath && entry.cwd) {
             projectPath = entry.cwd;
           }
+
+          if (entry.type === 'summary' && typeof entry.summary === 'string') {
+            summary = entry.summary;
+            return;
+          }
           
-          // 1. Count user/assistant messages
           if (entry.type === 'user' || entry.type === 'assistant') {
-            messageCount++;
-            
-            if (entry.durationMs) {
-              totalDuration += entry.durationMs;
-            }
+            sawConversationEntry = true;
             
             // Extract model from first message that has it
             if (
@@ -383,67 +395,10 @@ export class HistoryIndexer {
 
             // Capture first user message for fallback summary
             if (entry.type === 'user' && !firstUserMessage) {
-              if (typeof entry.message === 'string') {
-                firstUserMessage = entry.message;
-              } else if (typeof entry.message === 'object') {
-                 if (typeof entry.message.content === 'string') {
-                   firstUserMessage = entry.message.content;
-                 } else if (Array.isArray(entry.message.content)) {
-                   // Extract text from content blocks
-                   firstUserMessage = entry.message.content
-                     .filter((block): block is TextContentBlock => block.type === 'text')
-                     .map((block) => block.text)
-                     .join(' ');
-                 }
-              }
-            }
-
-            // Extract tool metrics from assistant messages
-            if (entry.type === 'assistant' && entry.message && typeof entry.message === 'object') {
-              const msg = entry.message;
-              if (Array.isArray(msg.content)) {
-                for (const block of msg.content) {
-                  if (block.type !== 'tool_use') continue;
-                  if (!('name' in block)) continue;
-                  const toolName = block.name;
-                  if (!('input' in block)) continue;
-                  const input = block.input;
-                  if (!input) continue;
-
-                  if (toolName === 'Edit') {
-                    editCount++;
-                    const oldStr = input.old_string;
-                    const newStr = input.new_string;
-                    if (typeof oldStr === 'string' && typeof newStr === 'string') {
-                      for (const change of diffLines(oldStr, newStr)) {
-                        if (change.added) linesAdded += change.count || 0;
-                        else if (change.removed) linesRemoved += change.count || 0;
-                      }
-                    }
-                  } else if (toolName === 'MultiEdit') {
-                    const edits = input.edits as Array<{ old_string?: string; new_string?: string }> | undefined;
-                    if (Array.isArray(edits)) {
-                      editCount += edits.length;
-                      for (const edit of edits) {
-                        const oldStr = edit.old_string;
-                        const newStr = edit.new_string;
-                        if (typeof oldStr === 'string' && typeof newStr === 'string') {
-                          for (const change of diffLines(oldStr, newStr)) {
-                            if (change.added) linesAdded += change.count || 0;
-                            else if (change.removed) linesRemoved += change.count || 0;
-                          }
-                        }
-                      }
-                    }
-                  } else if (toolName === 'Write') {
-                    writeCount++;
-                    const content = input.content;
-                    if (typeof content === 'string' && content.length > 0) {
-                      const lines = content.split('\n');
-                      linesAdded += lines[lines.length - 1] === '' ? lines.length - 1 : lines.length;
-                    }
-                  }
-                }
+              firstUserMessage = this.extractUserMessageText(entry.message);
+              if (firstUserMessage) {
+                rl.close();
+                fileStream.destroy();
               }
             }
           }
@@ -453,43 +408,45 @@ export class HistoryIndexer {
         }
       });
 
-      rl.on('close', () => {
-        // Use truncated first user message as the summary
-        if (firstUserMessage) {
-          summary = firstUserMessage.slice(0, 100).replace(/\n/g, ' ');
-          if (firstUserMessage.length > 100) summary += '...';
-        }
-
-        if (messageCount === 0 && !summary) {
-            resolve(null); // Empty or invalid file
-            return;
-        }
-
-        resolve({
-          sessionId,
-          summary: summary || undefined,
-          projectPath: projectPath || undefined,
-          messageCount,
-          totalDuration,
-          model,
-          createdAt: firstTimestamp || new Date(mtime).toISOString(),
-          updatedAt: lastTimestamp || new Date(mtime).toISOString(),
-          lastScannedAt: mtime,
-          filePath,
-          fileSize,
-          // Tool metrics (only include if there were any tool operations)
-          linesAdded: (linesAdded || linesRemoved || editCount || writeCount) ? linesAdded : undefined,
-          linesRemoved: (linesAdded || linesRemoved || editCount || writeCount) ? linesRemoved : undefined,
-          editCount: (linesAdded || linesRemoved || editCount || writeCount) ? editCount : undefined,
-          writeCount: (linesAdded || linesRemoved || editCount || writeCount) ? writeCount : undefined
-        });
-      });
+      rl.on('close', finish);
 
       rl.on('error', (err) => {
+        if (settled) return;
+        settled = true;
         fileStream.destroy();
         reject(err);
       });
     });
+  }
+
+  private extractUserMessageText(message: HistoryEntry['message']): string {
+    if (typeof message === 'string') {
+      return message.trim();
+    }
+
+    if (!message || typeof message !== 'object') {
+      return '';
+    }
+
+    if (typeof message.content === 'string') {
+      return message.content.trim();
+    }
+
+    if (!Array.isArray(message.content)) {
+      return '';
+    }
+
+    return message.content
+      .filter((block): block is TextContentBlock => block.type === 'text')
+      .map((block) => block.text)
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+  }
+
+  private truncateSummary(summary: string): string {
+    const cleaned = summary.replace(/\n/g, ' ').trim();
+    return cleaned.length > 100 ? `${cleaned.slice(0, 100)}...` : cleaned;
   }
 
   private buildConversationSummaryMetadata(

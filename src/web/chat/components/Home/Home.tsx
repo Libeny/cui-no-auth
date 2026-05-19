@@ -184,6 +184,8 @@ export function Home() {
   */
 
   const handleComposerSubmit = async (text: string, workingDirectory?: string, model?: string, permissionMode?: string, envPresetId?: string) => {
+    if (readOnly) return;
+
     setIsSubmitting(true);
 
     try {
@@ -240,14 +242,14 @@ export function Home() {
                 <h1 className="text-2xl font-semibold font-sans text-foreground">{readOnly ? 'Conversations' : 'What is the next task?'}</h1>
               </div>
               
-              {!readOnly && (
               <div className="w-full">
                 <Composer 
                   ref={composerRef}
                   workingDirectory={selectedDirectory}
                   onSubmit={handleComposerSubmit}
                   isLoading={isSubmitting}
-                  placeholder="Describe your task"
+                  disabled={readOnly || isSubmitting}
+                  placeholder={readOnly ? 'Read-only mode: starting conversations is disabled' : 'Describe your task'}
                   showDirectorySelector={true}
                   allowAllDirectoriesOption={true}
                   showModelSelector={true}
@@ -277,7 +279,6 @@ export function Home() {
                   }}
                 />
               </div>
-              )}
 
               <TaskTabs 
                 activeTab={activeTab}

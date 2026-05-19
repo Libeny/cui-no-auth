@@ -354,7 +354,7 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
   });
 
   const handleSendMessage = async (message: string, workingDirectory?: string, model?: string, permissionMode?: string, envPresetId?: string) => {
-    if (!sessionId) return;
+    if (!sessionId || readOnly || resolvedProvider !== 'claude') return;
 
     setError(null);
 
@@ -513,7 +513,6 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
         refreshFeedback={refreshFeedback}
       />
 
-      {!readOnly && (
       <div
         className="sticky bottom-0 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm z-10 w-full flex justify-center px-2 pb-6"
         aria-label="Message composer section"
@@ -525,16 +524,16 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
             onStop={handleStop}
             onPermissionDecision={handlePermissionDecision}
             isLoading={isConnected || isPermissionDecisionLoading}
-            disabled={resolvedProvider !== 'claude'}
-            placeholder={resolvedProvider === 'codex' ? 'Codex conversations are read-only for now' : 'Continue the conversation...'}
+            disabled={readOnly || resolvedProvider !== 'claude'}
+            placeholder={readOnly ? 'Read-only mode: continuing conversations is disabled' : resolvedProvider === 'codex' ? 'Codex conversations are read-only for now' : 'Continue the conversation...'}
             permissionRequest={currentPermissionRequest}
-            showPermissionUI={resolvedProvider === 'claude'}
-            showStopButton={resolvedProvider === 'claude'}
-            showModelSelector={resolvedProvider === 'claude'}
+            showPermissionUI={!readOnly && resolvedProvider === 'claude'}
+            showStopButton={!readOnly && resolvedProvider === 'claude'}
+            showModelSelector={!readOnly && resolvedProvider === 'claude'}
             enableFileAutocomplete={false}
             dropdownPosition="above"
             workingDirectory={conversationSummary?.projectPath}
-            envPresets={resolvedProvider === 'claude' ? envPresets : []}
+            envPresets={!readOnly && resolvedProvider === 'claude' ? envPresets : []}
             onFetchCommands={async (workingDirectory) => {
               try {
                 const response = await api.getCommands(workingDirectory || currentWorkingDirectory);
@@ -547,7 +546,6 @@ function ConversationViewContent({ sessionId }: { sessionId?: string }) {
           />
         </div>
       </div>
-      )}
 
     </div>
   );

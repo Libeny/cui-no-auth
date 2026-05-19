@@ -26,7 +26,7 @@ describe('Streaming Integration', () => {
     baseUrl = `http://localhost:${serverPort}`;
     
     // Create server
-    server = new CUIServer({ port: serverPort });
+    server = new CUIServer({ port: serverPort, readOnly: false });
     
     // Override the ProcessManager with one that uses mock Claude path
     const mockClaudePath = getMockClaudeExecutablePath();

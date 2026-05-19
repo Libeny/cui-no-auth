@@ -200,11 +200,10 @@ describe('ClaudeHistoryReader', () => {
       expect(conversation.sessionId).toBe(sessionId);
       expect(conversation.projectPath).toBe('/Users/username/project'); // Should use cwd from message
       expect(conversation.summary).toBe('Example Development Session'); // Should use summary linked via leafUuid
-      expect(conversation.messageCount).toBe(2); // user + assistant message
+      expect(conversation.messageCount).toBe(0);
       expect(conversation.createdAt).toBeDefined();
       expect(conversation.updatedAt).toBeDefined();
-      // Total cost calculation has been removed
-      expect(conversation.totalDuration).toBe(2500); // From assistant message
+      expect(conversation.totalDuration).toBe(0);
       expect(conversation.model).toBe('claude-opus-4-20250514'); // From assistant message
       expect(conversation.status).toBe('completed'); // CLI conversations are always completed
     });
@@ -1073,8 +1072,7 @@ partial output
       expect(metadata!.summary).toBe('Metadata Test Session');
       expect(metadata!.projectPath).toBe('/Users/username/project');
       expect(metadata!.model).toBe('claude-opus-4-20250514');
-      // Total cost calculation has been removed
-      expect(metadata!.totalDuration).toBe(3500); // 2000 + 1500
+      expect(metadata!.totalDuration).toBe(0);
     });
 
     it('should return null for non-existent conversation', async () => {

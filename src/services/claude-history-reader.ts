@@ -123,7 +123,7 @@ export class ClaudeHistoryReader {
             sessionInfo,
             createdAt: sessionInfo.created_at,
             updatedAt: sessionInfo.updated_at,
-            messageCount: sessionInfo.message_count || 0,
+            messageCount: 0,
             totalDuration: sessionInfo.total_duration || 0,
             model: sessionInfo.model || 'Unknown',
             status: 'completed' as const,
@@ -1319,6 +1319,8 @@ export class ClaudeHistoryReader {
   }
 
   private async scanConversationFile(filePath: string, projectDirName: string): Promise<ConversationSummary[]> {
+    const fileStats = await fs.stat(filePath);
+    const fileUpdatedAt = new Date(fileStats.mtimeMs).toISOString();
     const entries = await this.parseJsonlFile(filePath);
     const summaryBySession = new Map<string, string>();
     let pendingSummary = '';
@@ -1345,7 +1347,6 @@ export class ClaudeHistoryReader {
 
       const sessionInfo = await this.sessionInfoService.getSessionInfo(sessionId);
       const assistantMessages = messages.filter((message) => message.type === 'assistant');
-      const totalDuration = messages.reduce((sum, message) => sum + (message.durationMs || 0), 0);
       const projectPath = messages.find((message) => message.cwd)?.cwd || this.decodeProjectPath(projectDirName);
 
       conversations.push({
@@ -1354,9 +1355,9 @@ export class ClaudeHistoryReader {
         summary: summaryBySession.get(sessionId) || this.extractFirstText(messages[0]?.message) || 'No summary available',
         sessionInfo,
         createdAt: messages[0]?.timestamp || sessionInfo.created_at,
-        updatedAt: messages[messages.length - 1]?.timestamp || sessionInfo.updated_at,
-        messageCount: messages.length,
-        totalDuration,
+        updatedAt: fileUpdatedAt,
+        messageCount: 0,
+        totalDuration: 0,
         model:
           assistantMessages.find((message) => message.model)?.model ||
           assistantMessages[0]?.model ||

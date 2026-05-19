@@ -349,7 +349,7 @@ export class CodexHistoryReader {
       filePath: info.file_path || '',
       projectPath: info.project_path || '',
       summary: info.summary || 'Codex session',
-      messageCount: info.message_count || 0,
+      messageCount: 0,
       totalDuration: info.total_duration || 0,
       model: info.model || 'Codex',
       createdAt: info.created_at || fallbackTime,
@@ -416,10 +416,16 @@ export class CodexHistoryReader {
     let createdAt = '';
     let updatedAt = '';
     let firstUserMessage = '';
-    let messageCount = 0;
-
     for await (const line of rl) {
       if (!line.trim()) continue;
+
+      const timestamp = this.extractTimestampFromLine(line);
+      if (timestamp) {
+        if (!createdAt) createdAt = timestamp;
+        updatedAt = timestamp;
+      }
+
+      if (!this.shouldParseMetadataLine(line)) continue;
 
       let entry: CodexJsonlEntry;
       try {
@@ -456,9 +462,11 @@ export class CodexHistoryReader {
         const message = this.extractMessageSummary(payload as { role?: string; content?: Array<{ type?: string; text?: string }> });
         if (!message) continue;
 
-        messageCount++;
         if (message.role === 'user' && !firstUserMessage) {
           firstUserMessage = message.text;
+          rl.close();
+          stream.destroy();
+          break;
         }
       }
     }
@@ -476,11 +484,11 @@ export class CodexHistoryReader {
       filePath,
       projectPath,
       summary: this.truncateSummary(firstUserMessage) || 'Codex session',
-      messageCount,
+      messageCount: 0,
       totalDuration: 0,
       model,
       createdAt: createdAt || fallbackTime,
-      updatedAt: updatedAt || createdAt || fallbackTime,
+      updatedAt: fallbackTime,
       fileSize,
       lastScannedAt,
     };
@@ -503,6 +511,18 @@ export class CodexHistoryReader {
       role: payload.role,
       text,
     };
+  }
+
+  private shouldParseMetadataLine(line: string): boolean {
+    if (line.includes('"session_meta"') || line.includes('"turn_context"')) {
+      return true;
+    }
+
+    return line.includes('"response_item"') && /"type"\s*:\s*"message"/.test(line);
+  }
+
+  private extractTimestampFromLine(line: string): string {
+    return /"timestamp"\s*:\s*"([^"]+)"/.exec(line)?.[1] || '';
   }
 
   private isSyntheticUserText(text: string): boolean {

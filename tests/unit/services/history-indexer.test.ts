@@ -82,6 +82,53 @@ describe('HistoryIndexer', () => {
       ])
     );
   });
+
+  it('extracts Claude Code list metadata without parsing after the first user message', async () => {
+    const projectsDir = path.join(tempDir, 'projects', 'repo');
+    await fs.mkdir(projectsDir, { recursive: true });
+    const filePath = path.join(projectsDir, 'session-fast.jsonl');
+    await fs.writeFile(
+      filePath,
+      [
+        JSON.stringify({ type: 'summary', summary: 'Fast Claude session' }),
+        JSON.stringify({
+          type: 'user',
+          sessionId: 'session-fast',
+          cwd: '/repo',
+          timestamp: '2026-05-14T00:00:00.000Z',
+          message: { role: 'user', content: 'Open the list quickly' },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          sessionId: 'session-fast',
+          timestamp: '2026-05-14T00:00:01.000Z',
+          message: {
+            role: 'assistant',
+            model: 'claude-sonnet-4-5',
+            content: `late-heavy-marker-${'x'.repeat(1024 * 1024)}`,
+          },
+        }),
+      ].join('\n'),
+      'utf-8'
+    );
+
+    const stats = await fs.stat(filePath);
+    const indexer = new HistoryIndexer(mockSessionInfoService() as any);
+    const parseSpy = vi.spyOn(JSON, 'parse');
+
+    const metadata = await (indexer as any).extractMetadata(filePath, 'session-fast', stats.mtimeMs, stats.size);
+
+    expect(metadata).toEqual(expect.objectContaining({
+      sessionId: 'session-fast',
+      summary: 'Fast Claude session',
+      projectPath: '/repo',
+      messageCount: 0,
+      totalDuration: 0,
+      updatedAt: new Date(stats.mtimeMs).toISOString(),
+    }));
+    expect(parseSpy.mock.calls.some(([line]) => typeof line === 'string' && line.includes('late-heavy-marker'))).toBe(false);
+    parseSpy.mockRestore();
+  });
 });
 
 function mockSessionInfoService() {

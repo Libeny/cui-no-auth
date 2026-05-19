@@ -46,13 +46,13 @@ describe('CodexHistoryReader', () => {
         sessionId: 'codex:session-123',
         projectPath: '/repo/app',
         summary: 'Build the Codex viewer',
-        messageCount: 2,
+        messageCount: 0,
         model: 'gpt-5.4',
         createdAt: '2026-05-06T01:02:03.000Z',
-        updatedAt: '2026-05-06T01:02:05.000Z',
         status: 'completed',
       }),
     );
+    expect(new Date(result.conversations[0].updatedAt).getTime()).toBeGreaterThan(0);
   });
 
   it('serves cached conversation metadata while an index scan is already running', async () => {
@@ -116,7 +116,7 @@ describe('CodexHistoryReader', () => {
       sessionId: 'codex:indexed-session',
       projectPath: '/repo/indexed',
       summary: 'Indexed Codex task',
-      messageCount: 7,
+      messageCount: 0,
       model: 'gpt-5.5',
     }));
     expect(scanSpy).not.toHaveBeenCalled();
@@ -165,6 +165,47 @@ describe('CodexHistoryReader', () => {
     }));
     expect(extractSpy).not.toHaveBeenCalled();
     expect(sessionInfoService.bulkUpsertIndexedMetadata).not.toHaveBeenCalled();
+  });
+
+  it('skips parsing heavy reasoning records when extracting list metadata', async () => {
+    await writeSessionFile(tempDir, '2026/05/06/rollout-2026-05-06T01-02-03-session-heavy-reasoning.jsonl', [
+      sessionMeta({ id: 'session-heavy-reasoning', cwd: '/repo/app', model: 'gpt-5.4', timestamp: '2026-05-06T01:02:03.000Z' }),
+      userMessage('session-heavy-reasoning', 'Summarize without parsing COT', '2026-05-06T01:02:04.000Z'),
+      {
+        timestamp: '2026-05-06T01:02:05.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'reasoning',
+          summary: [],
+          encrypted_content: `heavy-cot-marker-${'x'.repeat(1024)}`,
+        },
+      },
+      assistantMessage('Done', '2026-05-06T01:02:06.000Z'),
+    ]);
+    const parseSpy = vi.spyOn(JSON, 'parse');
+
+    await reader.listConversations();
+
+    expect(parseSpy.mock.calls.some(([line]) => typeof line === 'string' && line.includes('heavy-cot-marker'))).toBe(false);
+    parseSpy.mockRestore();
+  });
+
+  it('uses fast metadata mode for large Codex files without parsing later message lines', async () => {
+    await writeSessionFile(tempDir, '2026/05/06/rollout-2026-05-06T01-02-03-session-large-fast.jsonl', [
+      sessionMeta({ id: 'session-large-fast', cwd: '/repo/app', model: 'gpt-5.4', timestamp: '2026-05-06T01:02:03.000Z' }),
+      userMessage('session-large-fast', 'Open this large COT quickly', '2026-05-06T01:02:04.000Z'),
+      assistantMessage(`large-message-marker-${'x'.repeat(1024 * 1024 + 1)}`, '2026-05-06T01:02:06.000Z'),
+    ]);
+    const parseSpy = vi.spyOn(JSON, 'parse');
+
+    const result = await reader.listConversations();
+
+    expect(result.conversations[0]).toEqual(expect.objectContaining({
+      sessionId: 'codex:session-large-fast',
+      summary: 'Open this large COT quickly',
+    }));
+    expect(parseSpy.mock.calls.some(([line]) => typeof line === 'string' && line.includes('large-message-marker'))).toBe(false);
+    parseSpy.mockRestore();
   });
 
   it('maps Codex messages and shell tools into ConversationMessage records', async () => {
@@ -274,6 +315,31 @@ describe('CodexHistoryReader', () => {
 
     expect(serialized).not.toContain('sealed-cot');
     expect(messages).toHaveLength(2);
+  });
+
+  it('does not parse encrypted reasoning content when loading conversation details', async () => {
+    await writeSessionFile(tempDir, '2026/05/06/rollout-2026-05-06T01-02-03-session-private-fast.jsonl', [
+      sessionMeta({ id: 'session-private-fast', cwd: '/repo/app', model: 'gpt-5.4', timestamp: '2026-05-06T01:02:03.000Z' }),
+      userMessage('session-private-fast', 'Question', '2026-05-06T01:02:04.000Z'),
+      {
+        timestamp: '2026-05-06T01:02:05.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'reasoning',
+          summary: [],
+          encrypted_content: `encrypted-detail-marker-${'x'.repeat(1024)}`,
+        },
+      },
+      assistantMessage('Answer', '2026-05-06T01:02:06.000Z'),
+    ]);
+    const parseSpy = vi.spyOn(JSON, 'parse');
+
+    const details = await reader.fetchConversationDetails('session-private-fast');
+
+    expect(details.messages).toHaveLength(2);
+    expect(JSON.stringify(details.messages)).not.toContain('encrypted-detail-marker');
+    expect(parseSpy.mock.calls.some(([line]) => typeof line === 'string' && line.includes('encrypted-detail-marker'))).toBe(false);
+    parseSpy.mockRestore();
   });
 
   it('maps reasoning summaries when Codex records a readable summary', async () => {

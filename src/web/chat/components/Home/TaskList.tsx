@@ -223,7 +223,6 @@ export function TaskList({
             recentDirectories={recentDirectories}
             status={conversation.status}
             provider={provider}
-            messageCount={conversation.messageCount}
             toolMetrics={conversation.toolMetrics}
             streamingId={conversation.streamingId}
             isArchived={activeTab === 'archive'}
