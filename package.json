@@ -39,7 +39,7 @@
     "clean": "rm -rf dist",
     "build": "npm run clean && NODE_ENV=production npm run build:web && tsc && tsc-alias && npm run build:mcp",
     "build:web": "NODE_ENV=production vite build",
-    "build:mcp": "chmod +x dist/mcp-server/index.js",
+    "build:mcp": "chmod +x dist/server.js dist/mcp-server/index.js",
     "start": "NODE_ENV=production node dist/server.js",
     "test": "NODE_ENV=test vitest run",
     "test:debug": "NODE_ENV=test LOG_LEVEL=debug vitest run",
