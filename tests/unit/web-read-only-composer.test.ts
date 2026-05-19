@@ -15,4 +15,10 @@ describe('read-only composer rendering', () => {
     expect(source).not.toContain('{!readOnly && (\n      <div');
     expect(source).toContain("disabled={readOnly || resolvedProvider !== 'claude'}");
   });
+
+  it('does not render message counts in the Home task list item', () => {
+    const source = readFileSync('src/web/chat/components/Home/TaskItem.tsx', 'utf-8');
+
+    expect(source).not.toContain('messageCount');
+  });
 });

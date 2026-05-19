@@ -20,7 +20,6 @@ type SessionRow = {
   // Indexed fields
   summary: string | null;
   project_path: string | null;
-  message_count: number | null;
   total_duration: number | null;
   model: string | null;
   last_scanned_at: number | null;
@@ -146,7 +145,6 @@ export class SessionInfoService {
     const columnsToAdd = [
       { name: 'summary', type: 'TEXT', default: 'NULL' },
       { name: 'project_path', type: 'TEXT', default: 'NULL' },
-      { name: 'message_count', type: 'INTEGER', default: 'NULL' },
       { name: 'total_duration', type: 'INTEGER', default: 'NULL' },
       { name: 'model', type: 'TEXT', default: 'NULL' },
       { name: 'last_scanned_at', type: 'INTEGER', default: 'NULL' },
@@ -181,12 +179,12 @@ export class SessionInfoService {
       INSERT INTO sessions (
         session_id, custom_name, created_at, updated_at, version,
         pinned, archived, continuation_session_id, initial_commit_head, permission_mode,
-        summary, project_path, message_count, total_duration, model, last_scanned_at, file_path, file_size,
+        summary, project_path, total_duration, model, last_scanned_at, file_path, file_size,
         lines_added, lines_removed, edit_count, write_count
       ) VALUES (
         @session_id, @custom_name, @created_at, @updated_at, @version,
         @pinned, @archived, @continuation_session_id, @initial_commit_head, @permission_mode,
-        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at, @file_path, @file_size,
+        @summary, @project_path, @total_duration, @model, @last_scanned_at, @file_path, @file_size,
         @lines_added, @lines_removed, @edit_count, @write_count
       )
     `);
@@ -203,7 +201,6 @@ export class SessionInfoService {
         version=@version,
         summary=COALESCE(@summary, summary),
         project_path=COALESCE(@project_path, project_path),
-        message_count=COALESCE(@message_count, message_count),
         total_duration=COALESCE(@total_duration, total_duration),
         model=COALESCE(@model, model),
         last_scanned_at=COALESCE(@last_scanned_at, last_scanned_at),
@@ -220,17 +217,16 @@ export class SessionInfoService {
     this.updateIndexedDataStmt = this.db.prepare(`
       INSERT INTO sessions (
         session_id, created_at, updated_at, version,
-        summary, project_path, message_count, total_duration, model, last_scanned_at, file_path, file_size,
+        summary, project_path, total_duration, model, last_scanned_at, file_path, file_size,
         lines_added, lines_removed, edit_count, write_count
       ) VALUES (
         @session_id, @created_at, @updated_at, 3,
-        @summary, @project_path, @message_count, @total_duration, @model, @last_scanned_at, @file_path, @file_size,
+        @summary, @project_path, @total_duration, @model, @last_scanned_at, @file_path, @file_size,
         @lines_added, @lines_removed, @edit_count, @write_count
       )
       ON CONFLICT(session_id) DO UPDATE SET
         summary=excluded.summary,
         project_path=excluded.project_path,
-        message_count=excluded.message_count,
         total_duration=excluded.total_duration,
         model=excluded.model,
         last_scanned_at=excluded.last_scanned_at,
@@ -275,7 +271,6 @@ export class SessionInfoService {
       // Map indexed fields
       summary: row.summary || undefined,
       project_path: row.project_path || undefined,
-      message_count: row.message_count || undefined,
       total_duration: row.total_duration || undefined,
       model: row.model || undefined,
       last_scanned_at: row.last_scanned_at || undefined,
@@ -322,7 +317,6 @@ export class SessionInfoService {
         permission_mode: 'default',
         summary: null,
         project_path: null,
-        message_count: null,
         total_duration: null,
         model: null,
         last_scanned_at: null,
@@ -386,7 +380,6 @@ export class SessionInfoService {
         permission_mode: 'default',
         summary: undefined,
         project_path: undefined,
-        message_count: undefined,
         total_duration: undefined,
         model: undefined,
         last_scanned_at: undefined,
@@ -412,7 +405,6 @@ export class SessionInfoService {
         permission_mode: merged.permission_mode,
         summary: merged.summary || null,
         project_path: merged.project_path || null,
-        message_count: merged.message_count || null,
         total_duration: merged.total_duration || null,
         model: merged.model || null,
         last_scanned_at: merged.last_scanned_at || null,
@@ -446,7 +438,6 @@ export class SessionInfoService {
     sessionId: string;
     summary?: string;
     projectPath?: string;
-    messageCount?: number;
     totalDuration?: number;
     model?: string;
     lastScannedAt: number;
@@ -471,7 +462,6 @@ export class SessionInfoService {
             updated_at: row.updatedAt || new Date().toISOString(),
             summary: row.summary || null,
             project_path: row.projectPath || null,
-            message_count: row.messageCount || null,
             total_duration: row.totalDuration || null,
             model: row.model || null,
             last_scanned_at: row.lastScannedAt,
@@ -585,7 +575,6 @@ export class SessionInfoService {
           AND NOT (
             summary IS NULL
             AND project_path IS NULL
-            AND message_count IS NULL
             AND model IS NULL
             AND file_path IS NULL
           )

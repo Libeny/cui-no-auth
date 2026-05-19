@@ -142,7 +142,6 @@ export class CodexHistoryIndexer {
         permission_mode: 'default',
         summary: metadata.summary,
         project_path: metadata.projectPath,
-        message_count: metadata.messageCount,
         total_duration: metadata.totalDuration,
         model: metadata.model,
         last_scanned_at: metadata.lastScannedAt,

@@ -351,7 +351,6 @@ export interface SessionInfo {
   // Indexed fields (cached from file system)
   summary?: string;             // Conversation summary
   project_path?: string;        // Project working directory
-  message_count?: number;       // Total number of messages
   total_duration?: number;      // Total duration in ms
   model?: string;               // Model used
   last_scanned_at?: number;     // Timestamp (ms) when the file was last scanned/indexed
@@ -389,7 +388,6 @@ export interface SessionUpdateRequest {
   // Indexed fields updates
   summary?: string;
   projectPath?: string;
-  messageCount?: number;
   totalDuration?: number;
   model?: string;
   lastScannedAt?: number;

@@ -145,7 +145,6 @@ function conversationFromUpdate(sessionId: string, metadata: any): ConversationS
       permission_mode: 'default',
       summary: metadata.summary,
       project_path: metadata.projectPath,
-      message_count: metadata.messageCount,
       model: metadata.model,
       sessionId,
     },
@@ -386,7 +385,6 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
               ...prev[existingIndex].sessionInfo,
               ...(nextConversation.sessionInfo || {}),
               updated_at: nextConversation.updatedAt,
-              message_count: nextConversation.messageCount,
               summary: nextConversation.summary || prev[existingIndex].sessionInfo.summary,
               project_path: nextConversation.projectPath || prev[existingIndex].sessionInfo.project_path,
               model: nextConversation.model || prev[existingIndex].sessionInfo.model,
@@ -403,7 +401,6 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
           sessionInfo: {
             ...updated[existingIndex].sessionInfo,
             ...(nextConversation.sessionInfo || {}),
-            message_count: nextConversation.messageCount,
             summary: nextConversation.summary || updated[existingIndex].sessionInfo.summary,
           },
         };

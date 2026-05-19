@@ -68,7 +68,6 @@ describe('SessionInfoService with SQLite', () => {
         sessionId: 'claude-session',
         summary: 'Claude task',
         projectPath: '/repo',
-        messageCount: 1,
         totalDuration: 0,
         model: 'claude',
         lastScannedAt: 1,
@@ -79,7 +78,6 @@ describe('SessionInfoService with SQLite', () => {
         sessionId: 'codex:ghost-session',
         summary: 'No summary available',
         projectPath: '',
-        messageCount: 0,
         totalDuration: 0,
         model: 'Unknown',
         lastScannedAt: 1,
@@ -100,7 +98,6 @@ describe('SessionInfoService with SQLite', () => {
         sessionId: 'claude-session',
         summary: 'Claude task',
         projectPath: '/repo/claude',
-        messageCount: 1,
         totalDuration: 0,
         model: 'claude',
         lastScannedAt: 1,
@@ -113,7 +110,6 @@ describe('SessionInfoService with SQLite', () => {
         sessionId: 'codex:indexed-session',
         summary: 'Codex task',
         projectPath: '/repo/codex',
-        messageCount: 3,
         totalDuration: 0,
         model: 'gpt-5.5',
         lastScannedAt: 2,
@@ -137,6 +133,49 @@ describe('SessionInfoService with SQLite', () => {
     }));
   });
 
+  it('should not create or expose message_count in indexed session metadata', async () => {
+    const columns = (service as any).db.pragma('table_info(sessions)') as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).not.toContain('message_count');
+
+    await service.bulkUpsertIndexedMetadata([
+      {
+        sessionId: 'claude-session',
+        summary: 'Claude task',
+        projectPath: '/repo',
+        messageCount: 42,
+        totalDuration: 0,
+        model: 'claude',
+        lastScannedAt: 1,
+        createdAt: '2026-05-06T00:00:00.000Z',
+        updatedAt: '2026-05-06T00:00:01.000Z',
+        filePath: '/tmp/claude.jsonl',
+        fileSize: 100,
+      } as any,
+    ]);
+
+    const indexed = await service.getConversations({ limit: 20, offset: 0, sortBy: 'updated', order: 'desc' });
+    expect((indexed.conversations[0] as any).message_count).toBeUndefined();
+
+    await service.updateSessionInfo('claude-session', {
+      custom_name: 'Renamed',
+      message_count: 99,
+    } as any);
+    const updated = await service.getExistingSessionInfo('claude-session');
+    expect((updated as any)?.message_count).toBeUndefined();
+  });
+
+  it('should ignore legacy message-count-only rows in conversation lists', async () => {
+    (service as any).db.prepare('ALTER TABLE sessions ADD COLUMN message_count INTEGER DEFAULT NULL').run();
+    (service as any).db.prepare(`
+      INSERT INTO sessions (session_id, created_at, updated_at, version, message_count)
+      VALUES ('legacy-count-only', '2026-05-06T00:00:00.000Z', '2026-05-06T00:00:01.000Z', 3, 99)
+    `).run();
+
+    const result = await service.getConversations({ limit: 20, offset: 0, sortBy: 'updated', order: 'desc' });
+
+    expect(result.total).toBe(0);
+  });
+
   it('should not return empty placeholder rows in conversation lists', async () => {
     await service.syncMissingSessions(['019df918-b3b9-7682-8aad-8586dc93cf76']);
     await service.bulkUpsertIndexedMetadata([
@@ -144,7 +183,6 @@ describe('SessionInfoService with SQLite', () => {
         sessionId: 'claude-session',
         summary: 'Claude task',
         projectPath: '/repo',
-        messageCount: 1,
         totalDuration: 0,
         model: 'claude',
         lastScannedAt: 1,

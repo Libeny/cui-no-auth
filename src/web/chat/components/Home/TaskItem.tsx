@@ -17,7 +17,6 @@ interface TaskItemProps {
   status: 'ongoing' | 'completed' | 'error' | 'pending';
   provider?: 'claude' | 'codex';
   streamingId?: string;
-  messageCount?: number;
   toolMetrics?: {
     linesAdded: number;
     linesRemoved: number;
@@ -48,7 +47,6 @@ export const TaskItem = memo(function TaskItem({
   status,
   provider = 'claude',
   streamingId,
-  messageCount,
   toolMetrics,
   routeSessionId,
   // liveStatus is deprecated in favor of LiveTaskStatus component
@@ -192,12 +190,6 @@ export const TaskItem = memo(function TaskItem({
                 <span>{projectPath || 'No project'}</span>
                 <span className="text-muted-foreground/50 text-xs font-mono shrink-0">({displaySessionId})</span>
               </span>
-              {messageCount !== undefined && (
-                <>
-                  <span className="text-muted-foreground">·</span>
-                  <span className="text-muted-foreground">{messageCount}</span>
-                </>
-              )}
             </div>
           </div>
           

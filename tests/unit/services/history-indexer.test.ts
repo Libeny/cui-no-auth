@@ -61,7 +61,6 @@ describe('HistoryIndexer', () => {
         sessionId,
         summary: sessionId,
         projectPath: '/repo',
-        messageCount: 1,
         totalDuration: 0,
         model: 'claude',
         createdAt: '2026-05-14T00:00:00.000Z',
@@ -122,7 +121,6 @@ describe('HistoryIndexer', () => {
       sessionId: 'session-fast',
       summary: 'Fast Claude session',
       projectPath: '/repo',
-      messageCount: 0,
       totalDuration: 0,
       updatedAt: new Date(stats.mtimeMs).toISOString(),
     }));

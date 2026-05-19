@@ -12,7 +12,6 @@ interface IndexedMetadata {
   sessionId: string;
   summary?: string;
   projectPath?: string;
-  messageCount: number;
   totalDuration: number;
   model: string;
   createdAt?: string;
@@ -341,7 +340,6 @@ export class HistoryIndexer {
           sessionId,
           summary: summaryText || undefined,
           projectPath: projectPath || undefined,
-          messageCount: 0,
           totalDuration: 0,
           model,
           createdAt: firstTimestamp || fallbackTime,
@@ -461,7 +459,7 @@ export class HistoryIndexer {
       sessionInfo,
       createdAt: metadata.createdAt || sessionInfo.created_at,
       updatedAt: metadata.updatedAt || sessionInfo.updated_at,
-      messageCount: metadata.messageCount || 0,
+      messageCount: 0,
       totalDuration: metadata.totalDuration || 0,
       model: metadata.model || 'Unknown',
       status: 'completed',
