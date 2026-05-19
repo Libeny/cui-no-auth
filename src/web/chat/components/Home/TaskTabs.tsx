@@ -1,65 +1,118 @@
 import React from 'react';
-import { Filter } from 'lucide-react';
-import { Tabs, TabsList, TabsTrigger } from '@/web/chat/components/ui/tabs';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/web/chat/components/ui/select';
+import { Search } from 'lucide-react';
 import type { ConversationSourceFilter } from '../../types';
 
+export type HomeTimeFilter = 'all' | '1h' | '6h' | 'today' | '3d' | '7d';
+
 interface TaskTabsProps {
-  activeTab: 'tasks' | 'history' | 'archive';
-  onTabChange: (tab: 'tasks' | 'history' | 'archive') => void;
   sourceFilter: ConversationSourceFilter;
   onSourceFilterChange: (provider: ConversationSourceFilter) => void;
+  searchQuery: string;
+  onSearchQueryChange: (query: string) => void;
+  timeFilter: HomeTimeFilter;
+  onTimeFilterChange: (filter: HomeTimeFilter) => void;
 }
 
-export function TaskTabs({ activeTab, onTabChange, sourceFilter, onSourceFilterChange }: TaskTabsProps) {
+const sourceOptions: Array<{
+  value: ConversationSourceFilter;
+  label: string;
+  ariaLabel: string;
+  iconSrc?: string;
+}> = [
+  { value: 'all', label: 'All', ariaLabel: 'All agents' },
+  { value: 'claude', label: '', ariaLabel: 'Claude Code', iconSrc: '/agent-icons/claude-code.png' },
+  { value: 'codex', label: '', ariaLabel: 'Codex', iconSrc: '/agent-icons/codex.png' },
+];
+
+const timeOptions: Array<{ value: HomeTimeFilter; label: string }> = [
+  { value: 'all', label: 'All' },
+  { value: '1h', label: '1h' },
+  { value: '6h', label: '6h' },
+  { value: 'today', label: 'Today' },
+  { value: '3d', label: '3d' },
+  { value: '7d', label: '7d' },
+];
+
+export function TaskTabs({
+  sourceFilter,
+  onSourceFilterChange,
+  searchQuery,
+  onSearchQueryChange,
+  timeFilter,
+  onTimeFilterChange,
+}: TaskTabsProps) {
   return (
-    <Tabs value={activeTab} onValueChange={(value) => onTabChange(value as 'tasks' | 'history' | 'archive')} className="w-full mt-4">
-      <div className="flex w-full items-center justify-between gap-3 border-b border-border/30">
-        <TabsList className="w-64 flex justify-start gap-4 bg-transparent rounded-none h-auto p-0">
-          <TabsTrigger 
-            value="tasks" 
-            className="data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-foreground border-0 rounded-none pb-3 pt-2 px-2 text-muted-foreground hover:text-muted-foreground/80 transition-colors"
-            aria-label="Tab selector to view all tasks"
-          >
-            Tasks
-          </TabsTrigger>
-          <TabsTrigger 
-            value="history"
-            className="data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-foreground border-0 rounded-none pb-3 pt-2 px-2 text-muted-foreground hover:text-muted-foreground/80 transition-colors"
-            aria-label="Tab selector to view history"
-          >
-            History
-          </TabsTrigger>
-          <TabsTrigger 
-            value="archive"
-            className="data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-foreground border-0 rounded-none pb-3 pt-2 px-2 text-muted-foreground hover:text-muted-foreground/80 transition-colors"
-            aria-label="Tab selector to view archived tasks"
-          >
-            Archive
-          </TabsTrigger>
-        </TabsList>
-        <Select value={sourceFilter} onValueChange={(value) => onSourceFilterChange(value as ConversationSourceFilter)}>
-          <SelectTrigger
-            size="sm"
-            className="mb-2 h-8 w-[142px] shrink-0 rounded-md border-border/70 bg-background text-xs font-medium shadow-none"
-            aria-label="Filter task source"
-          >
-            <Filter size={14} />
-            <SelectValue placeholder="全部" />
-          </SelectTrigger>
-          <SelectContent align="end" className="z-[220]">
-            <SelectItem value="all">全部</SelectItem>
-            <SelectItem value="claude">Claude Code</SelectItem>
-            <SelectItem value="codex">Codex</SelectItem>
-          </SelectContent>
-        </Select>
+    <div className="w-full mt-4 border-b border-border/30 pb-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <div
+          className="inline-flex shrink-0 rounded-md border border-border/70 bg-muted/20 p-0.5"
+          role="group"
+          aria-label="Filter conversations by agent"
+        >
+          {sourceOptions.map((option) => {
+            const isActive = sourceFilter === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => onSourceFilterChange(option.value)}
+                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-[5px] px-2.5 text-xs font-medium transition-colors ${
+                  isActive
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground'
+                } ${option.label ? 'min-w-[42px] px-2' : 'w-8 px-0'}`}
+                aria-label={option.ariaLabel}
+                aria-pressed={isActive}
+                title={option.ariaLabel}
+              >
+                {option.iconSrc && (
+                  <img
+                    src={option.iconSrc}
+                    alt=""
+                    className="h-4 w-4 shrink-0 object-contain"
+                    draggable={false}
+                  />
+                )}
+                {option.label && <span>{option.label}</span>}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex h-9 min-w-[220px] flex-1 items-center gap-2 rounded-md border border-border/70 bg-background px-3">
+          <Search size={14} className="shrink-0 text-muted-foreground" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(event) => onSearchQueryChange(event.target.value)}
+            placeholder="Search summary or session id"
+            className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+            aria-label="Search conversations by summary or session id"
+          />
+        </div>
+
+        <div
+          className="inline-flex shrink-0 rounded-md border border-border/70 bg-muted/20 p-0.5"
+          role="group"
+          aria-label="Filter conversations by time"
+        >
+          {timeOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => onTimeFilterChange(option.value)}
+              className={`h-8 rounded-[5px] px-2.5 text-xs font-medium transition-colors ${
+                timeFilter === option.value
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              aria-pressed={timeFilter === option.value}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
       </div>
-    </Tabs>
+    </div>
   );
 }

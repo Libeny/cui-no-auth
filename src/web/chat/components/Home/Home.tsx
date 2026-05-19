@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useDeferredValue } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConversations } from '../../contexts/ConversationsContext';
 import { api } from '../../services/api';
 import { Header } from './Header';
 import { ALL_DIRECTORIES_VALUE, Composer, ComposerRef } from '@/web/chat/components/Composer';
-import { TaskTabs } from './TaskTabs';
+import { TaskTabs, type HomeTimeFilter } from './TaskTabs';
 import { TaskList } from './TaskList';
 import type { ConversationSourceFilter, EnvPreset } from '../../types';
 
@@ -22,8 +22,10 @@ export function Home() {
     getMostRecentWorkingDirectory,
     listRefreshFeedback,
   } = useConversations();
-  const [activeTab, setActiveTab] = useState<'tasks' | 'history' | 'archive'>('tasks');
   const [sourceFilter, setSourceFilter] = useState<ConversationSourceFilter>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const [timeFilter, setTimeFilter] = useState<HomeTimeFilter>('today');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedDirectory, setSelectedDirectory] = useState<string | undefined>(ALL_DIRECTORIES_VALUE);
   const [envPresets, setEnvPresets] = useState<EnvPreset[]>([]);
@@ -75,29 +77,60 @@ export function Home() {
     };
   }, []);
 
-  // Get filter parameters based on active tab + selected directory
-  const getFiltersForTab = (tab: 'tasks' | 'history' | 'archive', projectPath?: string, provider: ConversationSourceFilter = sourceFilter) => {
-    const base = (() => {
-      switch (tab) {
-        case 'tasks':
-          return { archived: false, hasContinuation: false };
-        case 'history':
-          return { hasContinuation: true };
-        case 'archive':
-          return { archived: true, hasContinuation: false };
-        default:
-          return {};
-      }
-    })();
-    const withProvider = provider === 'all' ? { ...base, provider } : { ...base, provider };
-    return projectPath && projectPath !== ALL_DIRECTORIES_VALUE ? { ...withProvider, projectPath } : withProvider;
+  const getUpdatedAfterForTimeFilter = (filter: HomeTimeFilter): string | undefined => {
+    if (filter === 'all') return undefined;
+
+    const now = new Date();
+    if (filter === 'today') {
+      const startOfDay = new Date(now);
+      startOfDay.setHours(0, 0, 0, 0);
+      return startOfDay.toISOString();
+    }
+
+    const hoursByFilter: Record<Exclude<HomeTimeFilter, 'all' | 'today'>, number> = {
+      '1h': 1,
+      '6h': 6,
+      '3d': 24 * 3,
+      '7d': 24 * 7,
+    };
+    return new Date(now.getTime() - hoursByFilter[filter] * 60 * 60 * 1000).toISOString();
+  };
+
+  const getConversationFilters = (
+    projectPath: string | undefined = selectedDirectory,
+    provider: ConversationSourceFilter = sourceFilter,
+    query: string = deferredSearchQuery,
+    time: HomeTimeFilter = timeFilter,
+  ) => {
+    const filters: {
+      provider: ConversationSourceFilter;
+      projectPath?: string;
+      query?: string;
+      updatedAfter?: string;
+    } = { provider };
+
+    const trimmedQuery = query.trim();
+    if (trimmedQuery) {
+      filters.query = trimmedQuery;
+    }
+
+    const updatedAfter = getUpdatedAfterForTimeFilter(time);
+    if (updatedAfter) {
+      filters.updatedAfter = updatedAfter;
+    }
+
+    if (projectPath && projectPath !== ALL_DIRECTORIES_VALUE) {
+      filters.projectPath = projectPath;
+    }
+
+    return filters;
   };
 
   // Auto-refresh on navigation back to Home
   useEffect(() => {
     // Refresh on component mount if we have conversations
     if (conversationCountRef.current > 0) {
-      loadConversations(conversationCountRef.current, getFiltersForTab(activeTab, selectedDirectory, sourceFilter));
+      loadConversations(conversationCountRef.current, getConversationFilters(selectedDirectory, sourceFilter, deferredSearchQuery, timeFilter));
     }
     
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -116,13 +149,13 @@ export function Home() {
     return () => clearTimeout(timer);
   }, [readOnly]);
 
-  // Reload conversations when tab or directory changes
+  // Reload conversations when filters change
   useEffect(() => {
-    const filters = getFiltersForTab(activeTab, selectedDirectory, sourceFilter);
+    const filters = getConversationFilters(selectedDirectory, sourceFilter, deferredSearchQuery, timeFilter);
     console.log('[Home] Loading conversations with filters:', filters);
     loadConversations(undefined, filters);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, selectedDirectory, sourceFilter]);
+  }, [selectedDirectory, sourceFilter, deferredSearchQuery, timeFilter]);
 
   const showRefreshNotice = (message: string) => {
     if (refreshNoticeTimerRef.current) {
@@ -147,41 +180,12 @@ export function Home() {
   const handleManualRefresh = async () => {
     setIsManualRefreshing(true);
     try {
-      const outcome = await loadConversations(conversationCountRef.current || undefined, undefined, false);
+      const outcome = await loadConversations(conversationCountRef.current || undefined, getConversationFilters(), false);
       showRefreshNotice(outcome === 'updated' ? '列表已更新' : '暂无最新消息');
     } finally {
       setIsManualRefreshing(false);
     }
   };
-
-  // Auto-refresh on focus - REMOVED
-  // Real-time updates are now handled by SSE in ConversationsContext
-  /*
-  useEffect(() => {
-    const handleFocus = () => {
-      // Only refresh if we have loaded conversations before
-      if (conversationCountRef.current > 0) {
-        loadConversations(conversationCountRef.current, getFiltersForTab(activeTab));
-      }
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && conversationCountRef.current > 0) {
-        loadConversations(conversationCountRef.current, getFiltersForTab(activeTab));
-      }
-    };
-
-    // Listen for window focus
-    window.addEventListener('focus', handleFocus);
-    // Listen for tab visibility change
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      window.removeEventListener('focus', handleFocus);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [loadConversations, activeTab]);
-  */
 
   const handleComposerSubmit = async (text: string, workingDirectory?: string, model?: string, permissionMode?: string, envPresetId?: string) => {
     if (readOnly) return;
@@ -212,19 +216,14 @@ export function Home() {
       <Header onRefresh={handleManualRefresh} isRefreshing={isManualRefreshing} />
 
       <main className="relative flex flex-1 w-full h-full overflow-hidden transition-all duration-[250ms] z-[1]">
-        {refreshNotice === '暂无最新消息' && (
-          <div className="pointer-events-none fixed left-1/2 top-20 z-[60] -translate-x-1/2 rounded-full border border-border/60 bg-background/95 px-4 py-2 text-xs text-muted-foreground shadow-lg backdrop-blur-sm">
+        {refreshNotice && (
+          <div className="pointer-events-none fixed left-1/2 top-4 z-[60] -translate-x-1/2 rounded-full border border-border/60 bg-background/95 px-4 py-2 text-xs text-muted-foreground shadow-lg backdrop-blur-sm">
             {refreshNotice}
           </div>
         )}
         <div className="flex flex-col h-full w-full">
           <div className="z-0 mx-auto flex flex-col w-full max-w-3xl h-full">
             <div className="sticky top-0 z-50 flex flex-col items-center bg-background">
-              {refreshNotice && refreshNotice !== '暂无最新消息' && (
-                <div className="mb-2 rounded-full border border-border/60 bg-background/95 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm">
-                  {refreshNotice}
-                </div>
-              )}
               <div className="flex items-center gap-3 mb-4 pt-4">
                 <div className="flex items-center">
                   <div className="w-[27px] h-[27px] flex items-center justify-center">
@@ -281,10 +280,12 @@ export function Home() {
               </div>
 
               <TaskTabs 
-                activeTab={activeTab}
-                onTabChange={setActiveTab}
                 sourceFilter={sourceFilter}
                 onSourceFilterChange={setSourceFilter}
+                searchQuery={searchQuery}
+                onSearchQueryChange={setSearchQuery}
+                timeFilter={timeFilter}
+                onTimeFilterChange={setTimeFilter}
               />
             </div>
 
@@ -295,12 +296,7 @@ export function Home() {
               loadingMore={loadingMore}
               hasMore={hasMore}
               error={error}
-              activeTab={activeTab}
-              onLoadMore={(filters) => loadMoreConversations(
-                selectedDirectory && selectedDirectory !== ALL_DIRECTORIES_VALUE
-                  ? { ...filters, provider: sourceFilter, projectPath: selectedDirectory }
-                  : { ...filters, provider: sourceFilter }
-              )}
+              onLoadMore={() => loadMoreConversations()}
             />
           </div>
         </div>
